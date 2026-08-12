@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forest Trail Popcorn Labels</title>
+<style>
+  :root {
+    --accent: #e6a817;
+    --accent-dark: #c78e0a;
+    --ink: #2b2620;
+    --paper: #fffdf7;
+    --line: #e7ddc8;
+    --warn-bg: #fff3cd;
+    --warn-line: #e6c757;
+    --err-bg: #fdecea;
+    --err-line: #e0a09a;
+    --ok: #2e7d32;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    line-height: 1.45;
+  }
+  header {
+    background: #fff;
+    border-bottom: 3px solid var(--accent);
+    padding: 14px 20px 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 18px;
+  }
+  header h1 { font-size: 22px; margin: 0 0 10px; }
+  header h1 .pop { font-size: 26px; margin-right: 6px; }
+  nav { display: flex; gap: 4px; margin-left: auto; }
+  nav button {
+    border: none; background: none; font-size: 15px; padding: 10px 16px;
+    cursor: pointer; border-radius: 8px 8px 0 0; color: #6b6152;
+  }
+  nav button.active { background: var(--accent); color: #fff; font-weight: 600; }
+  main { max-width: 1000px; margin: 0 auto; padding: 18px 20px 60px; }
+
+  #banner[hidden] { display: none; }
+  #banner {
+    background: var(--warn-bg); border: 1px solid var(--warn-line);
+    border-radius: 10px; padding: 12px 16px; margin-bottom: 16px;
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;
+  }
+  .banner-buttons { display: flex; gap: 8px; }
+
+  .toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: #fff; padding: 10px 18px; border-radius: 10px;
+    max-width: 90vw; z-index: 50; box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  }
+  .toast.error { background: #a33; }
+
+  .btn {
+    background: #fff; border: 1px solid #c9bda3; border-radius: 8px;
+    padding: 9px 16px; font-size: 15px; cursor: pointer; color: var(--ink);
+  }
+  .btn:hover { border-color: var(--accent-dark); }
+  .btn.primary { background: var(--accent); border-color: var(--accent-dark); color: #fff; font-weight: 600; }
+  .btn.primary:hover { background: var(--accent-dark); }
+  .btn.big { font-size: 18px; padding: 14px 28px; }
+  .btn.small { padding: 4px 10px; font-size: 13px; }
+  .btn.danger { color: #a33; }
+  .btn:disabled { opacity: .4; cursor: default; }
+
+  #dropzone {
+    border: 3px dashed var(--accent); border-radius: 16px; background: #fff;
+    padding: 44px 20px; text-align: center; cursor: pointer; transition: background .15s;
+  }
+  #dropzone.drag { background: #fdf3d7; }
+  #dropzone .dz-icon { font-size: 44px; }
+  #dropzone .dz-main { font-size: 19px; font-weight: 600; margin-top: 6px; }
+  #dropzone .dz-sub { color: #6b6152; margin-top: 4px; }
+
+  .file-ok { margin: 14px 0 4px; color: var(--ok); font-size: 15px; }
+  .warn {
+    background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 10px;
+    padding: 10px 14px; margin: 10px 0; font-size: 15px;
+  }
+  .warn.error { background: var(--err-bg); border-color: var(--err-line); }
+  .warn label { margin: 0 8px; white-space: nowrap; }
+
+  .totals-card {
+    display: flex; flex-wrap: wrap; gap: 10px 28px; background: #fff;
+    border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin: 14px 0;
+  }
+  .totals-card .big { font-size: 24px; font-weight: 700; color: var(--accent-dark); margin-right: 4px; }
+  .totals-card small { color: #6b6152; }
+
+  #downloadBtn { margin: 6px 0 10px; }
+
+  #preview h3 { margin: 18px 0 8px; }
+  .page-wrap { margin-bottom: 22px; }
+  .page {
+    position: relative; background: #fff; border: 1px solid #d8cfb9;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08); overflow: hidden;
+  }
+  .page-num { color: #8a8072; font-size: 13px; margin-top: 5px; }
+  .label-box { position: absolute; border: 1px dashed #d9d0ba; }
+  .label-line {
+    position: absolute; left: 0; right: 0; text-align: center;
+    white-space: nowrap; overflow: hidden; font-family: Helvetica, Arial, sans-serif;
+  }
+
+  h2 { font-size: 19px; margin: 26px 0 10px; border-bottom: 2px solid var(--line); padding-bottom: 4px; }
+  .settings-toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 4px; }
+  #versionInfo { color: #6b6152; font-size: 14px; margin: 8px 0 2px; }
+
+  table { border-collapse: collapse; background: #fff; border-radius: 10px; width: 100%; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 15px; }
+  th { background: #f7f1e3; font-weight: 600; font-size: 13.5px; }
+  tr.grade-row td { background: #fbf7ec; font-weight: 700; color: var(--accent-dark); }
+  td input:not([type=checkbox]), td select {
+    font-size: 15px; padding: 5px 7px; border: 1px solid #d8cfb9; border-radius: 6px; width: 100%;
+  }
+  td input.num { width: 4.5em; }
+  .row-actions { white-space: nowrap; }
+  .add-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0 4px; }
+  .add-row input, .add-row select { font-size: 15px; padding: 7px 9px; border: 1px solid #d8cfb9; border-radius: 6px; }
+
+  fieldset {
+    border: 1px solid var(--line); border-radius: 10px; background: #fff;
+    padding: 12px 16px; margin-top: 8px;
+  }
+  fieldset label { display: inline-block; margin: 6px 18px 6px 0; }
+  fieldset input { font-size: 15px; padding: 6px 8px; border: 1px solid #d8cfb9; border-radius: 6px; }
+  fieldset .hint { color: #6b6152; font-size: 13.5px; margin-top: 6px; }
+  .col-input { width: 3.5em; text-transform: uppercase; }
+
+  #tab-help li { margin: 6px 0; }
+  #tab-help section { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 6px 20px 14px; margin-bottom: 14px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="pop">🍿</span>Forest Trail Popcorn Labels</h1>
+  <nav>
+    <button data-tab="make" class="active">Make Labels</button>
+    <button data-tab="settings">Roster &amp; Settings</button>
+    <button data-tab="help">Help</button>
+  </nav>
+</header>
+
+<main>
+  <div id="banner" hidden></div>
+
+  <section id="tab-make">
+    <div id="dropzone">
+      <div class="dz-icon">📄</div>
+      <div class="dz-main">Drop the weekly Excel order file here</div>
+      <div class="dz-sub">or click to choose it (.xlsx) — nothing is uploaded, it stays on this computer</div>
+      <input id="fileInput" type="file" accept=".xlsx,.xlsm,.xls" hidden>
+    </div>
+    <div id="fileStatus"></div>
+    <div id="warnings"></div>
+    <div id="totals"></div>
+    <button id="downloadBtn" class="btn primary big" hidden>⬇ Download PDF for printing</button>
+    <div id="preview"></div>
+  </section>
+
+  <section id="tab-settings" hidden>
+    <div id="versionInfo"></div>
+    <div class="settings-toolbar">
+      <button id="exportBtn" class="btn">Export settings</button>
+      <button id="importBtn" class="btn">Import settings</button>
+      <input id="importInput" type="file" accept=".json" hidden>
+      <button id="shareBtn" class="btn">Copy share link</button>
+      <button id="resetBtn" class="btn danger">Reset to school defaults</button>
+    </div>
+
+    <h2>Teacher roster</h2>
+    <p>One popcorn bag per student plus one per adult. Rooms with a helper/aide should have
+       <strong>Adults = 2</strong>. Names must match the weekly Excel export exactly.</p>
+    <table>
+      <thead><tr><th>Teacher</th><th style="width:9em">Grade</th><th style="width:6em">Adults</th><th style="width:3em"></th></tr></thead>
+      <tbody id="rosterBody"></tbody>
+    </table>
+    <div class="add-row">
+      <input id="newTeacherName" placeholder="New teacher name">
+      <select id="newTeacherGrade">
+        <option value="K">KG</option><option value="1">1st</option><option value="2">2nd</option>
+        <option value="3">3rd</option><option value="4">4th</option><option value="5">5th</option>
+      </select>
+      <input id="newTeacherAdults" type="number" min="1" max="9" value="1" style="width:4.5em" title="Adults in room">
+      <button id="addTeacherBtn" class="btn primary">Add teacher</button>
+    </div>
+
+    <h2>Staff &amp; extra labels</h2>
+    <p>These print after the classroom labels every week. “Small middle text” shrinks the middle
+       line to fit longer locations. “Bags” is only used for the bag totals shown after loading a
+       file (leave blank to not count it).</p>
+    <table>
+      <thead><tr>
+        <th>Top line (big)</th><th>Middle line</th><th>Bottom line (big)</th>
+        <th style="width:5.5em">Copies</th><th style="width:5em">Small middle</th>
+        <th style="width:5.5em">Bags</th><th style="width:8em"></th>
+      </tr></thead>
+      <tbody id="staffBody"></tbody>
+    </table>
+    <div class="add-row"><button id="addStaffBtn" class="btn primary">Add label</button></div>
+
+    <h2>Advanced — only touch if the export format changes</h2>
+    <fieldset>
+      <label>Popcorn item codes (comma-separated)<br>
+        <input id="advItemCodes" style="width:26em"></label><br>
+      <label>Teacher column <input id="advTeacherCol" class="col-input"></label>
+      <label>Item code column <input id="advItemCol" class="col-input"></label>
+      <label>Student count column <input id="advQtyCol" class="col-input"></label>
+      <label>First data row <input id="advFirstRow" type="number" min="1" style="width:4.5em"></label>
+      <div class="hint">Columns are Excel letters (A, B, C…). Rows above “First data row” are skipped as headers.</div>
+    </fieldset>
+  </section>
+
+  <section id="tab-help" hidden>
+    <section>
+      <h2>Weekly routine (2 minutes)</h2>
+      <ol>
+        <li>Get the weekly popcorn order export (the Excel file).</li>
+        <li>Open this page and drop the file onto the big dashed box.</li>
+        <li>Check the yellow warnings, if any — they tell you about new teachers or kids without a teacher listed.</li>
+        <li>Click <strong>Download PDF for printing</strong>.</li>
+        <li>Print the PDF on <strong>Avery 5163</strong> label sheets (2″ × 4″, 10 per sheet).
+            In the print dialog choose <strong>Actual size / 100%</strong> — never “Fit to page”.</li>
+      </ol>
+    </section>
+    <section>
+      <h2>When a teacher changes</h2>
+      <ol>
+        <li>Go to <strong>Roster &amp; Settings</strong> and add, remove, or edit the teacher. Changes save automatically <em>on this computer</em>.</li>
+        <li>To share the change with the rest of the crew, click <strong>Copy share link</strong> and text/email it,
+            or <strong>Export settings</strong> and send the file (others use <strong>Import settings</strong>).</li>
+        <li>To make the change permanent for everyone, send the exported <code>settings.json</code> to whoever
+            maintains this website — they commit it and every browser picks it up automatically.</li>
+      </ol>
+    </section>
+    <section>
+      <h2>Common questions</h2>
+      <ul>
+        <li><strong>A teacher shows a warning saying they’re not in the roster.</strong> A new hire, or the name is
+            spelled differently in the export. Use the “Add to roster” button in the warning, or fix the spelling in the roster.</li>
+        <li><strong>Where does my data go?</strong> Nowhere. The Excel file is read entirely inside your browser and
+            never uploaded. Settings are saved in your browser on this computer.</li>
+        <li><strong>The PDF prints misaligned.</strong> Make sure the print dialog says Actual size / 100% scale,
+            and the label stock is Avery 5163 (or equivalent 2″ × 4″, 10-up).</li>
+        <li><strong>No orders found?</strong> The export format may have changed — check the item codes and columns
+            under Roster &amp; Settings → Advanced.</li>
+      </ul>
+    </section>
+  </section>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+
+<script><!--INJECT:XLSX--></script>
+<script><!--INJECT:JSPDF--></script>
+<script>window.BAKED_DEFAULTS = /*INJECT:DEFAULTS*/null;</script>
+<script><!--INJECT:APP--></script>
+</body>
+</html>

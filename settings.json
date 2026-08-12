@@ -1,0 +1,59 @@
+{
+  "version": "2026-08-12",
+  "school": "Forest Trail Elementary",
+  "grades": {
+    "order": ["K", "1", "2", "3", "4", "5"],
+    "pretty": { "K": "KG", "1": "1st", "2": "2nd", "3": "3rd", "4": "4th", "5": "5th" }
+  },
+  "teachers": [
+    { "name": "Aune", "grade": "K", "adults": 1 },
+    { "name": "Berry", "grade": "K", "adults": 1 },
+    { "name": "Davis", "grade": "K", "adults": 2 },
+    { "name": "Judy Hurst", "grade": "K", "adults": 1 },
+    { "name": "Martinez", "grade": "K", "adults": 1 },
+    { "name": "Bernacki", "grade": "1", "adults": 1 },
+    { "name": "Brightwell", "grade": "1", "adults": 1 },
+    { "name": "Dunagan", "grade": "1", "adults": 1 },
+    { "name": "Martin", "grade": "1", "adults": 1 },
+    { "name": "Shipley", "grade": "1", "adults": 1 },
+    { "name": "Espich", "grade": "2", "adults": 2 },
+    { "name": "Falsone", "grade": "2", "adults": 1 },
+    { "name": "Kissinger", "grade": "2", "adults": 1 },
+    { "name": "Richardson", "grade": "2", "adults": 1 },
+    { "name": "Slawson", "grade": "2", "adults": 1 },
+    { "name": "Chamness", "grade": "3", "adults": 2 },
+    { "name": "Grant", "grade": "3", "adults": 1 },
+    { "name": "Sarah Hurst", "grade": "3", "adults": 1 },
+    { "name": "Medina", "grade": "3", "adults": 1 },
+    { "name": "Oden", "grade": "3", "adults": 1 },
+    { "name": "Rivas", "grade": "3", "adults": 1 },
+    { "name": "Brookshire", "grade": "4", "adults": 1 },
+    { "name": "Hemphill", "grade": "4", "adults": 2 },
+    { "name": "Hernandez", "grade": "4", "adults": 1 },
+    { "name": "Ellis", "grade": "4", "adults": 2 },
+    { "name": "Roe", "grade": "4", "adults": 1 },
+    { "name": "Rosier", "grade": "4", "adults": 1 },
+    { "name": "Fields", "grade": "5", "adults": 2 },
+    { "name": "Melanson", "grade": "5", "adults": 1 },
+    { "name": "Park", "grade": "5", "adults": 2 },
+    { "name": "Platt", "grade": "5", "adults": 1 },
+    { "name": "Polivka", "grade": "5", "adults": 1 }
+  ],
+  "staffLabels": [
+    { "line1": "CDC Staff", "line2": "Portable Bldg", "line3": "8 Bags", "copies": 1, "smallMiddle": false, "bags": 8 },
+    { "line1": "Cafeteria", "line2": "1/2 to 3/4 plastic bag", "line3": "of loose popcorn", "copies": 1, "smallMiddle": false, "bags": null },
+    { "line1": "Specials", "line2": "(To Office Front Desk)", "line3": "8 Bags", "copies": 1, "smallMiddle": false, "bags": 8 },
+    { "line1": "Bus Drivers", "line2": "Deliver to Library", "line3": "9 Bags", "copies": 2, "smallMiddle": false, "bags": 9 },
+    { "line1": "Custodial Office", "line2": "Inside Kinder/1st Workroom", "line3": "7 Bags", "copies": 2, "smallMiddle": true, "bags": 7 },
+    { "line1": "Learning Lab", "line2": "(To Office Front Desk)", "line3": "22 Bags", "copies": 2, "smallMiddle": false, "bags": 22 },
+    { "line1": "Library", "line2": "Deliver to the Library", "line3": "10 Bags", "copies": 2, "smallMiddle": false, "bags": 10 },
+    { "line1": "Office", "line2": "(To Office Front Desk)", "line3": "16 Bags", "copies": 2, "smallMiddle": false, "bags": 16 }
+  ],
+  "parsing": {
+    "itemCodes": ["SE-POPCORN", "SE-POPCORN-SPRING-ONLY"],
+    "teacherColumn": "A",
+    "itemColumn": "C",
+    "quantityColumn": "G",
+    "firstDataRow": 3
+  }
+}

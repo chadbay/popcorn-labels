@@ -1,0 +1,4 @@
+.DS_Store
+popcorn_*.pdf
+test_output.pdf
+node_modules/
