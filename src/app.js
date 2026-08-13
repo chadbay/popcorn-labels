@@ -34,8 +34,10 @@ const state = {
   settings: null,       // active settings
   basedOnVersion: null, // which defaults version the active settings came from
   dismissedVersion: null,
-  file: null,           // { name, buffer } of the last loaded Excel
+  excel: null,          // { name, buffer } — weekly order export (counts)
+  packing: null,        // { name, rooms: Map<teacher, string[]>, unspecified } — packing list PDF (names)
   result: null,         // output of buildResult()
+  mismatches: [],       // rooms where Excel and packing-list counts disagree
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -236,6 +238,92 @@ function parseWorkbook(buffer) {
   return { orders, missingTeacher, matchedRows, totalRows: rows.length };
 }
 
+/* ============================ Packing-list PDF parsing ============================ */
+
+let pdfjsReady = false;
+function initPdfJs() {
+  if (pdfjsReady || !window.pdfjsLib) return;
+  // The worker is inlined as a non-executing script tag; hand it to pdf.js as a blob URL
+  // so the single-file app works offline and on file://.
+  const tag = document.getElementById('pdfWorkerSrc');
+  if (tag) {
+    const blob = new Blob([tag.textContent], { type: 'text/javascript' });
+    pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+  }
+  pdfjsReady = true;
+}
+
+/* Parses the Booster Club "Packing List Report": one section per homeroom,
+ * columns Order # / Date / Parent / Student / Option / Q. Returns
+ * { rooms: Map<teacher, studentName[]>, unspecified: number }. */
+async function parsePackingList(buffer) {
+  initPdfJs();
+  const pdf = await pdfjsLib.getDocument({ data: buffer, isEvalSupported: false }).promise;
+  const rooms = new Map();
+  let unspecified = 0;
+
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+
+    // Group positioned text runs into lines by y, then sort top-to-bottom, left-to-right.
+    const byY = [];
+    for (const it of tc.items) {
+      if (!it.str || !it.str.trim()) continue;
+      const y = it.transform[5];
+      const x = it.transform[4];
+      let line = byY.find((l) => Math.abs(l.y - y) <= 2);
+      if (!line) { line = { y, items: [] }; byY.push(line); }
+      line.items.push({ x, str: it.str.trim() });
+    }
+    byY.sort((a, b) => b.y - a.y);
+    const lines = byY.map((l) => l.items.sort((a, b) => a.x - b.x));
+    if (!lines.length) continue;
+
+    const teacher = lines[0].map((i) => i.str).join(' ').trim();
+
+    // Locate the column header row to learn where the Student column sits.
+    let studentX = null, optionX = Infinity;
+    for (const items of lines) {
+      const hs = items.find((i) => i.str === 'Student');
+      if (hs && items.some((i) => i.str === 'Parent')) {
+        studentX = hs.x;
+        const ho = items.find((i) => i.str === 'Option' || i.str === 'Q');
+        if (ho) optionX = ho.x;
+        break;
+      }
+    }
+
+    for (const items of lines) {
+      if (!/^\d{3,6}-\d+$/.test(items[0].str.split(/\s+/)[0])) continue; // data rows start with an order number
+      const last = items[items.length - 1];
+      const qty = /^\d+$/.test(last.str) ? Math.max(1, Math.round(Number(last.str))) : 1;
+      let student = '';
+      if (studentX != null) {
+        student = items
+          .filter((i) => i !== items[0] && i !== last && i.x >= studentX - 4 && i.x < optionX - 4)
+          .map((i) => i.str).join(' ').trim();
+      }
+      if (teacher === 'UNSPECIFIED' || teacher === 'Unknown' || !student) {
+        unspecified += qty;
+        continue;
+      }
+      if (!rooms.has(teacher)) rooms.set(teacher, []);
+      for (let k = 0; k < qty; k++) rooms.get(teacher).push(student);
+    }
+  }
+
+  // Alphabetize by last name, the way Jenine's rosters are sorted.
+  for (const names of rooms.values()) {
+    names.sort((a, b) => {
+      const la = a.split(/\s+/).slice(-1)[0].toLowerCase();
+      const lb = b.split(/\s+/).slice(-1)[0].toLowerCase();
+      return la.localeCompare(lb) || a.localeCompare(b);
+    });
+  }
+  return { rooms, unspecified };
+}
+
 /* ============================ Label building ============================ */
 
 function classroomLines(teacher, gradePretty, students, adults) {
@@ -362,37 +450,228 @@ function downloadPdf() {
   generatePdf().save(pdfFileName());
 }
 
+/* ============================ Roster labels PDF ============================ */
+/* Jenine's combined label+roster format: letter pages printed on full-sheet
+ * 8.5x11 label stock, three homeroom strips per page separated by two cuts.
+ * Each strip: "KG:  Aune" / "TOTAL BAGS:  24" / student names /
+ * "23 STUDENTS/1 TEACHER" / footer. Staff labels follow, two per row. */
+
+const RL = {
+  pageW: 612, pageH: 792,
+  cols: 3,
+  headerY: 46, totalY: 70, namesY: 102,
+  tailGap: 24, footerGap: 18, bottomMargin: 36,
+};
+RL.colW = RL.pageW / RL.cols;
+
+function rosterRooms() {
+  const s = state.settings;
+  const out = [];
+  for (const grade of s.grades.order) {
+    const inGrade = s.teachers
+      .filter((t) => t.grade === grade && state.packing.rooms.has(t.name))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const t of inGrade) {
+      const names = state.packing.rooms.get(t.name);
+      const adults = Math.max(0, Math.round(Number(t.adults)) || 0);
+      out.push({
+        teacher: t.name,
+        gradePretty: s.grades.pretty[t.grade] || t.grade,
+        names,
+        adults,
+        total: names.length + adults,
+      });
+    }
+  }
+  return out;
+}
+
+function drawCutLines(doc, xs, y1, y2) {
+  doc.setDrawColor(150);
+  doc.setLineDashPattern([4, 4], 0);
+  for (const x of xs) doc.line(x, y1, x, y2);
+  doc.setLineDashPattern([], 0);
+  doc.setDrawColor(0);
+}
+
+function generateRosterPdf() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: [RL.pageW, RL.pageH], compress: true });
+  const rooms = rosterRooms();
+  const footer = (state.settings.roster && state.settings.roster.footer) || '';
+  const maxW = RL.colW - 18;
+
+  const centered = (text, x, y, size, bold) => {
+    doc.setFont('helvetica', bold ? 'bold' : 'normal');
+    doc.setFontSize(fittedSize(doc, text, size, maxW));
+    doc.text(text, x, y, { align: 'center' });
+  };
+
+  rooms.forEach((room, i) => {
+    const col = i % RL.cols;
+    if (i > 0 && col === 0) doc.addPage();
+    if (col === 0) drawCutLines(doc, [RL.colW, RL.colW * 2], 0, RL.pageH);
+    const cx = col * RL.colW + RL.colW / 2;
+
+    centered(`${room.gradePretty}:  ${room.teacher}`, cx, RL.headerY, 16, true);
+    centered(`TOTAL BAGS:  ${room.total}`, cx, RL.totalY, 13, true);
+
+    // Fit the name list above the tail block, shrinking leading/size if needed.
+    const tailHeight = RL.tailGap + RL.footerGap + RL.bottomMargin;
+    const avail = RL.pageH - RL.namesY - tailHeight;
+    let leading = 14.5, size = 11;
+    if (room.names.length * leading > avail) {
+      leading = Math.max(8, avail / room.names.length);
+      size = Math.min(size, leading - 2);
+    }
+    doc.setFont('helvetica', 'normal');
+    let y = RL.namesY;
+    for (const name of room.names) {
+      doc.setFontSize(fittedSize(doc, name, size, maxW));
+      doc.text(name, cx, y, { align: 'center' });
+      y += leading;
+    }
+
+    const word = room.adults === 1 ? 'TEACHER' : 'TEACHERS';
+    centered(`${room.names.length} STUDENTS/${room.adults} ${word}`, cx, y + RL.tailGap, 11, true);
+    if (footer) centered(footer, cx, y + RL.tailGap + RL.footerGap, 10, true);
+  });
+
+  // Staff labels: two per row, dashed guides for cutting.
+  const staff = [];
+  for (const sl of state.settings.staffLabels) {
+    const copies = Math.max(0, Math.round(Number(sl.copies)) || 0);
+    for (let i = 0; i < copies; i++) staff.push(sl);
+  }
+  const perCol = 2, blockH = 96, topY = 60;
+  const perPage = perCol * Math.floor((RL.pageH - topY - RL.bottomMargin + 30) / blockH);
+  staff.forEach((sl, i) => {
+    const pos = i % perPage;
+    if (pos === 0) {
+      doc.addPage();
+      drawCutLines(doc, [RL.pageW / 2], 0, RL.pageH);
+    }
+    const row = Math.floor(pos / perCol);
+    const cx = (pos % perCol) * (RL.pageW / 2) + RL.pageW / 4;
+    const yTop = topY + row * blockH;
+    const smaxW = RL.pageW / 2 - 24;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(fittedSize(doc, sl.line1 || '', 15, smaxW));
+    if (sl.line1) doc.text(sl.line1, cx, yTop, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(fittedSize(doc, sl.line2 || '', sl.smallMiddle ? 10 : 12, smaxW));
+    if (sl.line2) doc.text(sl.line2, cx, yTop + 20, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(fittedSize(doc, sl.line3 || '', 15, smaxW));
+    if (sl.line3) doc.text(sl.line3, cx, yTop + 42, { align: 'center' });
+    if (row > 0 && pos % perCol === 0) {
+      doc.setDrawColor(150);
+      doc.setLineDashPattern([4, 4], 0);
+      doc.line(0, yTop - 34, RL.pageW, yTop - 34);
+      doc.setLineDashPattern([], 0);
+      doc.setDrawColor(0);
+    }
+  });
+
+  return doc;
+}
+
+function rosterFileName() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `rosters_${p(d.getMonth() + 1)}_${p(d.getDate())}_${String(d.getFullYear()).slice(-2)}.pdf`;
+}
+
+function downloadRosterPdf() {
+  if (!state.packing) return;
+  generateRosterPdf().save(rosterFileName());
+}
+
 /* ============================ Processing pipeline ============================ */
 
-function processBuffer(buffer, name) {
-  state.file = { name, buffer };
+function processExcelBuffer(buffer, name) {
+  state.excel = { name, buffer };
+  reprocess();
+}
+
+async function processPackingBuffer(buffer, name) {
+  try {
+    const parsed = await parsePackingList(buffer);
+    if (parsed.rooms.size === 0) {
+      renderOutput(`No homerooms found in ${name} — is it the Booster Club Packing List Report?`);
+      return;
+    }
+    state.packing = { name, rooms: parsed.rooms, unspecified: parsed.unspecified };
+  } catch (e) {
+    renderOutput(`Could not read ${name} as a Packing List PDF.`);
+    return;
+  }
   reprocess();
 }
 
 function reprocess() {
-  if (!state.file) { renderOutput(); return; }
-  let parsed;
-  try {
-    parsed = parseWorkbook(state.file.buffer);
-  } catch (e) {
-    state.result = null;
-    renderOutput('Could not read that file as an Excel spreadsheet. Make sure it is the weekly .xlsx order export.');
-    return;
+  state.mismatches = [];
+  if (!state.excel && !state.packing) { state.result = null; renderOutput(); return; }
+
+  let excelParsed = null;
+  if (state.excel) {
+    try {
+      excelParsed = parseWorkbook(state.excel.buffer);
+    } catch (e) {
+      state.result = null;
+      renderOutput('Could not read that file as an Excel spreadsheet. Make sure it is the weekly .xlsx order export.');
+      return;
+    }
   }
+
+  // Bag-label counts come from the Excel when present (the official export),
+  // otherwise from counting packing-list rows — verified to be the same data.
+  let parsed;
+  if (excelParsed) {
+    parsed = excelParsed;
+  } else {
+    const orders = new Map([...state.packing.rooms].map(([t, names]) => [t, names.length]));
+    parsed = {
+      orders,
+      missingTeacher: { students: state.packing.unspecified, rows: [] },
+      matchedRows: [...orders.values()].reduce((a, b) => a + b, 0) + state.packing.unspecified,
+    };
+  }
+
+  // With both files loaded, cross-check per-room counts (automates Jenine's
+  // manual database-vs-roster reconciliation).
+  if (excelParsed && state.packing) {
+    const teachers = new Set([...parsed.orders.keys(), ...state.packing.rooms.keys()]);
+    for (const t of [...teachers].sort()) {
+      const e = parsed.orders.get(t) || 0;
+      const p = (state.packing.rooms.get(t) || []).length;
+      if (e !== p) state.mismatches.push({ teacher: t, excel: e, packing: p });
+    }
+  }
+
   state.result = buildResult(parsed);
   renderOutput();
 }
 
 function handleFiles(files) {
-  const file = files && files[0];
-  if (!file) return;
-  if (!/\.(xlsx|xlsm|xls)$/i.test(file.name)) {
-    renderOutput('That does not look like an Excel file (.xlsx). Drop the weekly order export here.');
-    return;
+  if (!files || !files.length) return;
+  let routed = false;
+  for (const file of files) {
+    if (/\.(xlsx|xlsm|xls)$/i.test(file.name)) {
+      const reader = new FileReader();
+      reader.onload = () => processExcelBuffer(reader.result, file.name);
+      reader.readAsArrayBuffer(file);
+      routed = true;
+    } else if (/\.pdf$/i.test(file.name)) {
+      const reader = new FileReader();
+      reader.onload = () => processPackingBuffer(reader.result, file.name);
+      reader.readAsArrayBuffer(file);
+      routed = true;
+    }
   }
-  const reader = new FileReader();
-  reader.onload = () => processBuffer(reader.result, file.name);
-  reader.readAsArrayBuffer(file);
+  if (!routed) {
+    renderOutput('Drop the weekly Excel order export (.xlsx) and/or the Packing List Report (.pdf) here.');
+  }
 }
 
 /* ============================ Rendering: banners & toast ============================ */
@@ -430,20 +709,45 @@ function renderOutput(errorMsg) {
   const totals = $('#totals');
   const preview = $('#preview');
   const dlBtn = $('#downloadBtn');
+  const rosterBtn = $('#downloadRosterBtn');
 
   warnings.innerHTML = '';
   totals.innerHTML = '';
   preview.innerHTML = '';
   dlBtn.hidden = true;
+  rosterBtn.hidden = true;
 
   if (errorMsg) {
     status.innerHTML = `<div class="warn error">${esc(errorMsg)}</div>`;
     return;
   }
-  if (!state.file) { status.innerHTML = ''; return; }
+  if (!state.excel && !state.packing) { status.innerHTML = ''; return; }
 
   const r = state.result;
-  status.innerHTML = `<div class="file-ok">Loaded <strong>${esc(state.file.name)}</strong></div>`;
+  const slots = [];
+  if (state.excel) slots.push(`Order export: <strong>${esc(state.excel.name)}</strong> ✓`);
+  if (state.packing) {
+    slots.push(`Packing list: <strong>${esc(state.packing.name)}</strong> ✓ (${state.packing.rooms.size} homerooms)`);
+  }
+  if (!state.packing) {
+    slots.push(`<em>Add the Packing List Report PDF to also get roster labels with student names.</em>`);
+  } else if (!state.excel) {
+    slots.push(`<em>Counts taken from the packing list. Add the Excel export to cross-check them.</em>`);
+  }
+  status.innerHTML = `<div class="file-ok">${slots.join('<br>')}</div>`;
+
+  if (state.mismatches.length) {
+    const rows = state.mismatches
+      .map((m) => `<strong>${esc(m.teacher)}</strong> (Excel says ${m.excel}, packing list says ${m.packing})`)
+      .join('; ');
+    const div = document.createElement('div');
+    div.className = 'warn error';
+    div.innerHTML =
+      `The two files disagree on student counts for: ${rows}. ` +
+      `The bag labels use the Excel counts — check with the Booster Club which is right. ` +
+      `Roster labels list the packing-list names.`;
+    warnings.appendChild(div);
+  }
 
   if (r.matchedRows === 0) {
     warnings.innerHTML =
@@ -480,12 +784,15 @@ function renderOutput(errorMsg) {
   }
 
   if (r.missingTeacher.students > 0) {
+    const where = r.missingTeacher.rows.length
+      ? `(spreadsheet row${r.missingTeacher.rows.length === 1 ? '' : 's'} ${esc(r.missingTeacher.rows.join(', '))}) `
+      : `(listed as UNSPECIFIED in the packing list) `;
     const div = document.createElement('div');
     div.className = 'warn';
     div.innerHTML =
       `<strong>${r.missingTeacher.students} student${r.missingTeacher.students === 1 ? '' : 's'}</strong> ` +
-      `(spreadsheet row${r.missingTeacher.rows.length === 1 ? '' : 's'} ${esc(r.missingTeacher.rows.join(', '))}) ` +
-      `have no teacher specified in the export. They are <strong>not</strong> on any label — ` +
+      where +
+      `have no homeroom specified. They are <strong>not</strong> on any label — ` +
       `fix the export or hand-adjust a label after printing.`;
     warnings.appendChild(div);
   }
@@ -502,7 +809,52 @@ function renderOutput(errorMsg) {
     `</div>`;
 
   dlBtn.hidden = false;
+  rosterBtn.hidden = !state.packing;
   renderPreview();
+  if (state.packing) renderRosterPreview();
+}
+
+function renderRosterPreview() {
+  const preview = $('#preview');
+  const rooms = rosterRooms();
+  if (!rooms.length) return;
+  const h = document.createElement('h3');
+  h.textContent = 'Roster labels preview (3 per sheet — 2 cuts)';
+  preview.appendChild(h);
+
+  const SCALE = 0.55; // px per pt
+  const footer = (state.settings.roster && state.settings.roster.footer) || '';
+  for (let p = 0; p < Math.ceil(rooms.length / RL.cols); p++) {
+    const page = document.createElement('div');
+    page.className = 'page roster-page';
+    page.style.width = RL.pageW * SCALE + 'px';
+    page.style.height = RL.pageH * SCALE + 'px';
+    for (let c = 0; c < RL.cols; c++) {
+      const room = rooms[p * RL.cols + c];
+      if (!room) break;
+      const strip = document.createElement('div');
+      strip.className = 'roster-strip';
+      strip.style.left = c * RL.colW * SCALE + 'px';
+      strip.style.width = RL.colW * SCALE + 'px';
+      const word = room.adults === 1 ? 'TEACHER' : 'TEACHERS';
+      strip.innerHTML =
+        `<div class="rs-head">${esc(room.gradePretty)}:  ${esc(room.teacher)}</div>` +
+        `<div class="rs-total">TOTAL BAGS:  ${room.total}</div>` +
+        `<div class="rs-names">${room.names.map((n) => esc(n)).join('<br>')}</div>` +
+        `<div class="rs-sum">${room.names.length} STUDENTS/${room.adults} ${word}</div>` +
+        (footer ? `<div class="rs-foot">${esc(footer)}</div>` : '');
+      page.appendChild(strip);
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'page-wrap';
+    wrap.innerHTML = `<div class="page-num">Roster sheet ${p + 1}</div>`;
+    wrap.prepend(page);
+    preview.appendChild(wrap);
+  }
+  const note = document.createElement('div');
+  note.className = 'page-num';
+  note.textContent = 'Staff labels follow on additional sheets in the downloaded PDF.';
+  preview.appendChild(note);
 }
 
 function renderPreview() {
@@ -697,6 +1049,13 @@ function renderAdvanced() {
     p.firstDataRow = Math.max(1, Math.round(Number(e.target.value)) || 1);
     settingsEdited();
   };
+
+  $('#advRosterFooter').value = (state.settings.roster && state.settings.roster.footer) || '';
+  $('#advRosterFooter').onchange = (e) => {
+    if (!state.settings.roster) state.settings.roster = {};
+    state.settings.roster.footer = e.target.value.trim();
+    settingsEdited();
+  };
 }
 
 function settingsEdited() {
@@ -738,6 +1097,7 @@ async function init() {
   setupTabs();
   setupDropzone();
   $('#downloadBtn').onclick = downloadPdf;
+  $('#downloadRosterBtn').onclick = downloadRosterPdf;
   $('#exportBtn').onclick = exportSettings;
   $('#importBtn').onclick = () => $('#importInput').click();
   $('#importInput').onchange = (e) => { if (e.target.files[0]) importSettingsFile(e.target.files[0]); e.target.value = ''; };
@@ -764,6 +1124,10 @@ async function init() {
     state.settings = clone(d);
     state.basedOnVersion = d.version;
   }
+  // Settings saved by an older app version may predate the roster config.
+  if (!state.settings.roster) {
+    state.settings.roster = clone(defaults().roster || { footer: '' });
+  }
 
   renderSettingsTab();
 
@@ -775,7 +1139,10 @@ document.addEventListener('DOMContentLoaded', init);
 
 /* Hooks for automated testing — not used by the UI. */
 window.__popcorn = {
-  processArrayBuffer: (buf, name) => processBuffer(buf, name),
+  processArrayBuffer: (buf, name) => processExcelBuffer(buf, name),
+  processPackingArrayBuffer: (buf, name) => processPackingBuffer(buf, name),
+  generateRosterPdfBase64: () => generateRosterPdf().output('datauristring').split(',')[1],
+  getRosterRooms: () => rosterRooms(),
   getState: () => state,
   getSummary: () => state.result && {
     labels: state.result.labels.length,

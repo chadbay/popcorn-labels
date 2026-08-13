@@ -2,3 +2,4 @@
 popcorn_*.pdf
 test_output.pdf
 node_modules/
+private_*

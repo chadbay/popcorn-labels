@@ -1,19 +1,29 @@
 # 🍿 Forest Trail Popcorn Labels
 
-A zero-install web app that turns the weekly popcorn order Excel export into a
-print-ready PDF of bag labels (Avery 5163 — 2″ × 4″, 10 per sheet). It replaces
-the original [popcorn_labels.py](popcorn_labels_original.py) script so that no
-Python, terminal, or code editing is needed.
+A zero-install web app that turns the weekly popcorn order files into
+print-ready PDFs. It replaces the original
+[popcorn_labels.py](popcorn_labels_original.py) script so that no Python,
+terminal, or code editing is needed. Two outputs:
 
-Everything runs inside the browser — the Excel file is never uploaded anywhere.
+- **Bag labels** (from the weekly Excel order export) — Avery 5163/5963,
+  2″ × 4″, 10 per sheet. One per classroom plus the fixed staff labels.
+- **Roster labels** (from the Booster Club *Packing List Report* PDF) — the
+  combined label+roster format: grade/teacher header, `TOTAL BAGS`, the
+  participating students' names, `N STUDENTS/M TEACHER(S)`, and a footer.
+  Printed on full-sheet 8.5″ × 11″ label stock, three homeroom strips per page
+  (two cuts along the printed dashed guides), staff labels two-across after.
+
+Everything runs inside the browser — neither file is uploaded anywhere.
 
 ## For volunteers (weekly)
 
 1. Open the app page (bookmark it).
-2. Drag the weekly `.xlsx` order export onto the dashed box.
-3. Read any yellow warnings (new teachers, kids without a teacher listed).
-4. Click **Download PDF for printing** and print on Avery 5163 stock at
-   **Actual size / 100%** (never "Fit to page").
+2. Drag the weekly files onto the dashed box — the `.xlsx` order export and/or
+   the Packing List Report `.pdf` (both at once is fine). Either file alone
+   works: the Excel makes bag labels; the packing list makes both.
+3. Read any yellow warnings (new teachers, kids without a homeroom, or the two
+   files disagreeing on a room's count).
+4. Download and print at **Actual size / 100%** (never "Fit to page").
 
 The **Help** tab inside the app has the full instructions, including how to
 handle roster changes.
@@ -51,12 +61,13 @@ handle roster changes.
 | `settings.json` | Default roster / labels / parsing config |
 | `vendor/xlsx.full.min.js` | SheetJS 0.18.5 (Excel parsing) |
 | `vendor/jspdf.umd.min.js` | jsPDF 2.5.1 (PDF generation) |
+| `vendor/pdf.min.js` + `vendor/pdf.worker.min.js` | pdf.js 3.11.174 (packing-list PDF parsing; worker inlined as a blob) |
 
 ```bash
 node build.js
 ```
 
-inlines everything into a single self-contained `index.html` (~1.3 MB) that
+inlines everything into a single self-contained `index.html` (~2.6 MB) that
 also works opened straight from disk (e.g. off a USB stick).
 
 ### Testing
@@ -65,12 +76,17 @@ also works opened straight from disk (e.g. off a USB stick).
 a fake weekly export that exercises the edge cases: a teacher with orders under
 two item codes (quantities must sum), a teacher missing from the roster, rows
 with no teacher specified, and a non-popcorn item row (must be ignored).
-Drop it on the app and check the warnings and totals.
+`python3 scripts/make-sample-packing.py` (needs reportlab) regenerates
+[sample_packing_list.pdf](sample_packing_list.pdf), a count-matched fake
+Packing List Report with invented student names — no real student data lives
+in this repo. Drop both on the app and check the warnings and totals.
 
-The PDF output was verified against the original Python script's output for the
-same input: identical text, positions (baselines exact, centering within 0.5 pt),
-fonts, and page count. One deliberate difference: classroom labels are sorted
-alphabetically within each grade instead of by order of appearance in the Excel.
+The bag-label PDF was verified against the original Python script's output for
+the same input: identical text, positions (baselines exact, centering within
+0.5 pt), fonts, and page count — and against a real production run (the
+packing-list-only path reproduced that week's labels entry-for-entry). One
+deliberate difference: classroom labels are sorted alphabetically within each
+grade instead of by order of appearance in the Excel.
 
 ### Label geometry
 
