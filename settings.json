@@ -55,5 +55,8 @@
     "itemColumn": "C",
     "quantityColumn": "G",
     "firstDataRow": 3
+  },
+  "roster": {
+    "footer": "IF BAG IS SHORT, PLEASE SEE FRONT OFFICE"
   }
 }

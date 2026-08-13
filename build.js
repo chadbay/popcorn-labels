@@ -23,8 +23,16 @@ const inject = (token, content) => {
   html = html.replace(token, () => content);
 };
 
+// The worker rides inside a <script type="text/plain"> tag; an unbalanced "<!--"
+// in its source would shift the HTML tokenizer into escaped-script state and
+// could swallow the closing tag, so refuse to build if one appears.
+const worker = safeInline(read('vendor/pdf.worker.min.js'));
+if (/<!--(?![\s\S]*-->)/.test(worker)) throw new Error('pdf.worker contains unbalanced <!--');
+
 inject('<!--INJECT:XLSX-->', safeInline(read('vendor/xlsx.full.min.js')));
 inject('<!--INJECT:JSPDF-->', safeInline(read('vendor/jspdf.umd.min.js')));
+inject('<!--INJECT:PDFJS-->', safeInline(read('vendor/pdf.min.js')));
+inject('<!--INJECT:PDFJS_WORKER-->', worker);
 inject('/*INJECT:DEFAULTS*/null', safeInline(JSON.stringify(settings)));
 inject('<!--INJECT:APP-->', safeInline(read('src/app.js')));
 

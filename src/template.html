@@ -95,7 +95,20 @@
   .totals-card .big { font-size: 24px; font-weight: 700; color: var(--accent-dark); margin-right: 4px; }
   .totals-card small { color: #6b6152; }
 
-  #downloadBtn { margin: 6px 0 10px; }
+  .dl-row { display: flex; gap: 12px; flex-wrap: wrap; margin: 6px 0 10px; }
+
+  .roster-page { overflow: hidden; }
+  .roster-strip {
+    position: absolute; top: 0; bottom: 0; text-align: center; padding-top: 12px;
+    border-right: 1px dashed #d9d0ba; font-family: Helvetica, Arial, sans-serif;
+    overflow: hidden;
+  }
+  .roster-strip:last-child { border-right: none; }
+  .rs-head { font-weight: 700; font-size: 9px; }
+  .rs-total { font-weight: 700; font-size: 8px; margin: 3px 0 6px; }
+  .rs-names { font-size: 6.5px; line-height: 1.22; }
+  .rs-sum { font-weight: 700; font-size: 7px; margin-top: 7px; }
+  .rs-foot { font-weight: 700; font-size: 6px; margin-top: 4px; }
 
   #preview h3 { margin: 18px 0 8px; }
   .page-wrap { margin-bottom: 22px; }
@@ -156,14 +169,18 @@
   <section id="tab-make">
     <div id="dropzone">
       <div class="dz-icon">📄</div>
-      <div class="dz-main">Drop the weekly Excel order file here</div>
-      <div class="dz-sub">or click to choose it (.xlsx) — nothing is uploaded, it stays on this computer</div>
-      <input id="fileInput" type="file" accept=".xlsx,.xlsm,.xls" hidden>
+      <div class="dz-main">Drop the weekly files here</div>
+      <div class="dz-sub">Excel order export (.xlsx) for bag labels · Packing List Report (.pdf) for roster labels with names<br>
+        Drop both at once or one at a time — nothing is uploaded, files stay on this computer</div>
+      <input id="fileInput" type="file" accept=".xlsx,.xlsm,.xls,.pdf" multiple hidden>
     </div>
     <div id="fileStatus"></div>
     <div id="warnings"></div>
     <div id="totals"></div>
-    <button id="downloadBtn" class="btn primary big" hidden>⬇ Download PDF for printing</button>
+    <div class="dl-row">
+      <button id="downloadBtn" class="btn primary big" hidden>⬇ Bag labels PDF</button>
+      <button id="downloadRosterBtn" class="btn primary big" hidden>⬇ Roster labels PDF</button>
+    </div>
     <div id="preview"></div>
   </section>
 
@@ -217,6 +234,9 @@
       <label>Student count column <input id="advQtyCol" class="col-input"></label>
       <label>First data row <input id="advFirstRow" type="number" min="1" style="width:4.5em"></label>
       <div class="hint">Columns are Excel letters (A, B, C…). Rows above “First data row” are skipped as headers.</div>
+      <label>Roster label footer<br>
+        <input id="advRosterFooter" style="width:26em"></label>
+      <div class="hint">Printed in bold at the bottom of every roster label.</div>
     </fieldset>
   </section>
 
@@ -224,13 +244,20 @@
     <section>
       <h2>Weekly routine (2 minutes)</h2>
       <ol>
-        <li>Get the weekly popcorn order export (the Excel file).</li>
-        <li>Open this page and drop the file onto the big dashed box.</li>
-        <li>Check the yellow warnings, if any — they tell you about new teachers or kids without a teacher listed.</li>
-        <li>Click <strong>Download PDF for printing</strong>.</li>
-        <li>Print the PDF on <strong>Avery 5163</strong> label sheets (2″ × 4″, 10 per sheet).
-            In the print dialog choose <strong>Actual size / 100%</strong> — never “Fit to page”.</li>
+        <li>Get the weekly files: the popcorn order <strong>Excel export</strong> and the
+            <strong>Packing List Report PDF</strong> (both from the Booster Club database).</li>
+        <li>Open this page and drop them onto the big dashed box (both at once is fine).</li>
+        <li>Check the yellow warnings, if any — new teachers, kids without a homeroom,
+            or the two files disagreeing on counts.</li>
+        <li><strong>Bag labels PDF</strong> — print on <strong>Avery 5163/5963</strong> label sheets
+            (2″ × 4″, 10 per sheet).</li>
+        <li><strong>Roster labels PDF</strong> — print on <strong>full-sheet 8.5″ × 11″ label stock</strong>,
+            then make 2 vertical cuts per sheet to separate the 3 homeroom strips
+            (staff labels follow on their own sheets, 2 across).</li>
+        <li>In every print dialog choose <strong>Actual size / 100%</strong> — never “Fit to page”.</li>
       </ol>
+      <p>Only have one of the two files? That still works: the Excel alone makes bag labels;
+         the packing list alone makes both (its per-room counts are the same data).</p>
     </section>
     <section>
       <h2>When a teacher changes</h2>
@@ -262,6 +289,8 @@
 
 <script><!--INJECT:XLSX--></script>
 <script><!--INJECT:JSPDF--></script>
+<script><!--INJECT:PDFJS--></script>
+<script type="text/plain" id="pdfWorkerSrc"><!--INJECT:PDFJS_WORKER--></script>
 <script>window.BAKED_DEFAULTS = /*INJECT:DEFAULTS*/null;</script>
 <script><!--INJECT:APP--></script>
 </body>
