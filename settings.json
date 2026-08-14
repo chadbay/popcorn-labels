@@ -1,5 +1,5 @@
 {
-  "version": "2026-08-14",
+  "version": "2026-08-14.2",
   "school": "Forest Trail Elementary",
   "grades": {
     "order": [
@@ -63,27 +63,22 @@
     {
       "name": "Shipley",
       "grade": "1",
-      "adults": 1
+      "adults": 2
     },
     {
       "name": "Espich",
       "grade": "2",
-      "adults": 2
+      "adults": 1
     },
     {
       "name": "Falsone",
       "grade": "2",
-      "adults": 1
-    },
-    {
-      "name": "Roe",
-      "grade": "2",
-      "adults": 1
+      "adults": 2
     },
     {
       "name": "Richardson",
       "grade": "2",
-      "adults": 1
+      "adults": 2
     },
     {
       "name": "Slawson",
@@ -93,7 +88,7 @@
     {
       "name": "Jones",
       "grade": "3",
-      "adults": 2
+      "adults": 1
     },
     {
       "name": "Grant",
@@ -106,19 +101,14 @@
       "adults": 1
     },
     {
-      "name": "Morris-Kissinger",
-      "grade": "3",
-      "adults": 1
-    },
-    {
       "name": "Rivas",
       "grade": "3",
-      "adults": 1
+      "adults": 2
     },
     {
       "name": "Brookshire",
       "grade": "4",
-      "adults": 1
+      "adults": 2
     },
     {
       "name": "Hemphill",
@@ -133,22 +123,12 @@
     {
       "name": "Ellis",
       "grade": "4",
-      "adults": 1
-    },
-    {
-      "name": "Johnson",
-      "grade": "4",
-      "adults": 1
+      "adults": 2
     },
     {
       "name": "Stephens",
       "grade": "4",
       "adults": 1
-    },
-    {
-      "name": "Gahaz",
-      "grade": "5",
-      "adults": 2
     },
     {
       "name": "Melanson",
@@ -163,17 +143,12 @@
     {
       "name": "Platt",
       "grade": "5",
-      "adults": 1
+      "adults": 2
     },
     {
       "name": "Polivka",
       "grade": "5",
       "adults": 2
-    },
-    {
-      "name": "Spencer",
-      "grade": "2",
-      "adults": 1
     }
   ],
   "staffLabels": [
@@ -236,10 +211,10 @@
     {
       "line1": "Office",
       "line2": "(To Office Front Desk)",
-      "line3": "16 Bags",
-      "copies": 2,
+      "line3": "22 Bags",
+      "copies": 1,
       "smallMiddle": false,
-      "bags": 16
+      "bags": 22
     }
   ],
   "parsing": {
