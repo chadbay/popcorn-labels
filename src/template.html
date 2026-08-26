@@ -86,7 +86,10 @@
     padding: 10px 14px; margin: 10px 0; font-size: 15px;
   }
   .warn.error { background: var(--err-bg); border-color: var(--err-line); }
+  .warn.ok { background: #eef7e9; border-color: #b8d6a8; }
   .warn label { margin: 0 8px; white-space: nowrap; }
+  .warn .mini-hint { display: block; color: #6b6152; font-size: 13px; margin-top: 4px; }
+  .note { color: #6b6152; font-size: 13.5px; }
 
   .totals-card {
     display: flex; flex-wrap: wrap; gap: 10px 28px; background: #fff;
@@ -225,6 +228,21 @@
     </table>
     <div class="add-row"><button id="addStaffBtn" class="btn primary">Add label</button></div>
 
+    <h2>Order fix-ups</h2>
+    <p>When a weekly order has <strong>no homeroom</strong> in the Booster Club database
+       (it shows as “UNSPECIFIED”), a warning on the Make Labels screen lets you file it to the
+       right student and homeroom. That saves a fix-up here, and it is applied automatically every
+       week until the database itself is corrected — then it does nothing and can be removed.
+       One fix-up covers one child; add one per child for a family with several.</p>
+    <table id="fixupsTable" hidden>
+      <thead><tr><th>Parent on the order</th><th>Student</th><th style="width:14em">Homeroom</th><th style="width:3em"></th></tr></thead>
+      <tbody id="fixupsBody"></tbody>
+    </table>
+    <p class="note" id="fixupsEmpty">No fix-ups saved — nothing needs one right now.</p>
+    <p class="note">Fix-ups contain student names, so they stay in this browser and in share links.
+       They are <strong>never</strong> included in “Export settings” — no student names end up in the
+       website’s public files.</p>
+
     <h2>Advanced — only touch if the export format changes</h2>
     <fieldset>
       <label>Popcorn item codes (comma-separated)<br>
@@ -274,6 +292,11 @@
       <ul>
         <li><strong>A teacher shows a warning saying they’re not in the roster.</strong> A new hire, or the name is
             spelled differently in the export. Use the “Add to roster” button in the warning, or fix the spelling in the roster.</li>
+        <li><strong>An order has no homeroom (“UNSPECIFIED” in the packing list).</strong> The family’s sign-up in the
+            Booster Club database is missing the homeroom. Ask the Booster Club to correct it — and in the meantime,
+            use the “File it” box in the warning: type the student’s name and pick the room. The app remembers the
+            fix-up and files that parent’s order automatically every week (one fix-up per child; manage them under
+            Roster &amp; Settings).</li>
         <li><strong>Where does my data go?</strong> Nowhere. The Excel file is read entirely inside your browser and
             never uploaded. Settings are saved in your browser on this computer.</li>
         <li><strong>The PDF prints misaligned.</strong> Make sure the print dialog says Actual size / 100% scale,

@@ -22,7 +22,12 @@ Everything runs inside the browser — neither file is uploaded anywhere.
    the Packing List Report `.pdf` (both at once is fine). Either file alone
    works: the Excel makes bag labels; the packing list makes both.
 3. Read any yellow warnings (new teachers, kids without a homeroom, or the two
-   files disagreeing on a room's count).
+   files disagreeing on a room's count). An order with no homeroom
+   ("UNSPECIFIED") can be filed on the spot: type the student's name, pick the
+   room, and the app remembers the fix-up and applies it automatically every
+   week until the Booster Club database is corrected. Fix-ups live in the
+   browser (and in share links) but are never included in exported
+   settings.json, so student names stay out of this public repo.
 4. Download and print at **Actual size / 100%** (never "Fit to page").
 
 The **Help** tab inside the app has the full instructions, including how to

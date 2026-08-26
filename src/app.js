@@ -35,7 +35,8 @@ const state = {
   basedOnVersion: null, // which defaults version the active settings came from
   dismissedVersion: null,
   excel: null,          // { name, buffer } — weekly order export (counts)
-  packing: null,        // { name, rooms: Map<teacher, string[]>, unspecified } — packing list PDF (names)
+  packing: null,        // { name, rooms: Map<teacher, string[]>, unassigned } — raw packing-list parse
+  packingEff: null,     // packing after roster fix-ups: { rooms, unassigned, applied }
   result: null,         // output of buildResult()
   mismatches: [],       // rooms where Excel and packing-list counts disagree
 };
@@ -84,7 +85,12 @@ function validateSettings(s) {
 }
 
 function adoptSettings(s, version) {
+  // Fix-ups are per-browser data; keep them across roster updates unless the
+  // incoming settings bring their own (e.g. a share link from another volunteer).
+  const prevFixups = state.settings && Array.isArray(state.settings.assignments)
+    ? state.settings.assignments : [];
   state.settings = clone(s);
+  if (!Array.isArray(state.settings.assignments)) state.settings.assignments = clone(prevFixups);
   state.basedOnVersion = version || s.version || 'unknown';
   saveLocal();
   renderSettingsTab();
@@ -99,6 +105,10 @@ function todayISO() {
 
 function exportSettings() {
   const out = clone(state.settings);
+  // Fix-ups contain student names; the export is meant for the public repo,
+  // so they never leave this browser (share links do include them).
+  const hadFixups = Array.isArray(out.assignments) && out.assignments.length > 0;
+  delete out.assignments;
   out.version = todayISO();
   const blob = new Blob([JSON.stringify(out, null, 2) + '\n'], { type: 'application/json' });
   const a = document.createElement('a');
@@ -107,7 +117,8 @@ function exportSettings() {
   a.download = 'settings.json';
   a.click();
   URL.revokeObjectURL(a.href);
-  toast('Settings exported. Committing this file to the repo makes it the new default for everyone.');
+  toast('Settings exported. Committing this file to the repo makes it the new default for everyone.' +
+    (hadFixups ? ' (Order fix-ups are not included — they contain student names.)' : ''));
 }
 
 function importSettingsFile(file) {
@@ -255,12 +266,13 @@ function initPdfJs() {
 
 /* Parses the Booster Club "Packing List Report": one section per homeroom,
  * columns Order # / Date / Parent / Student / Option / Q. Returns
- * { rooms: Map<teacher, studentName[]>, unspecified: number }. */
+ * { rooms: Map<teacher, studentName[]>, unassigned } where unassigned holds
+ * the rows missing a homeroom and/or student name: { room, parent, student, qty }. */
 async function parsePackingList(buffer) {
   initPdfJs();
   const pdf = await pdfjsLib.getDocument({ data: buffer, isEvalSupported: false }).promise;
   const rooms = new Map();
-  let unspecified = 0;
+  const unassigned = [];
 
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
@@ -282,11 +294,13 @@ async function parsePackingList(buffer) {
 
     const teacher = lines[0].map((i) => i.str).join(' ').trim();
 
-    // Locate the column header row to learn where the Student column sits.
-    let studentX = null, optionX = Infinity;
+    // Locate the column header row to learn where the Parent and Student columns sit.
+    let parentX = null, studentX = null, optionX = Infinity;
     for (const items of lines) {
       const hs = items.find((i) => i.str === 'Student');
-      if (hs && items.some((i) => i.str === 'Parent')) {
+      const hp = items.find((i) => i.str === 'Parent');
+      if (hs && hp) {
+        parentX = hp.x;
         studentX = hs.x;
         const ho = items.find((i) => i.str === 'Option' || i.str === 'Q');
         if (ho) optionX = ho.x;
@@ -297,31 +311,80 @@ async function parsePackingList(buffer) {
     for (const items of lines) {
       if (!/^\d{3,6}-\d+$/.test(items[0].str.split(/\s+/)[0])) continue; // data rows start with an order number
       const last = items[items.length - 1];
-      const qty = /^\d+$/.test(last.str) ? Math.max(1, Math.round(Number(last.str))) : 1;
-      let student = '';
-      if (studentX != null) {
-        student = items
-          .filter((i) => i !== items[0] && i !== last && i.x >= studentX - 4 && i.x < optionX - 4)
-          .map((i) => i.str).join(' ').trim();
-      }
+      // An UNSPECIFIED row can end at the parent name — only treat a trailing
+      // bare number as the Q column.
+      const qtyItem = items.length > 1 && /^\d+$/.test(last.str) ? last : null;
+      const qty = qtyItem ? Math.max(1, Math.round(Number(qtyItem.str))) : 1;
+      const colText = (fromX, toX) => items
+        .filter((i) => i !== items[0] && i !== qtyItem && i.x >= fromX - 4 && i.x < toX - 4)
+        .map((i) => i.str).join(' ').trim();
+      const student = studentX == null ? '' : colText(studentX, optionX);
+      const parent = parentX == null ? '' : colText(parentX, studentX == null ? optionX : studentX);
       if (teacher === 'UNSPECIFIED' || teacher === 'Unknown' || !student) {
-        unspecified += qty;
+        unassigned.push({ room: teacher, parent, student, qty });
         continue;
       }
       if (!rooms.has(teacher)) rooms.set(teacher, []);
       for (let k = 0; k < qty; k++) rooms.get(teacher).push(student);
     }
   }
+  return { rooms, unassigned };
+}
 
-  // Alphabetize by last name, the way Jenine's rosters are sorted.
-  for (const names of rooms.values()) {
-    names.sort((a, b) => {
-      const la = a.split(/\s+/).slice(-1)[0].toLowerCase();
-      const lb = b.split(/\s+/).slice(-1)[0].toLowerCase();
-      return la.localeCompare(lb) || a.localeCompare(b);
-    });
+/* ============================ Roster fix-ups ============================ */
+/* A fix-up files an order that the Booster Club database left without a
+ * homeroom ("UNSPECIFIED") under the right student and room, keyed by the
+ * parent's name on the order. One fix-up = one child = one bag, so a parent
+ * with several children gets one fix-up per child. Saved in this browser
+ * (and in share links, but never in exported settings.json — student names
+ * stay out of the public repo). */
+
+function normName(s) {
+  return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/* Alphabetize by last name, the way Jenine's rosters are sorted. */
+function sortRosterNames(names) {
+  names.sort((a, b) => {
+    const la = a.split(/\s+/).slice(-1)[0].toLowerCase();
+    const lb = b.split(/\s+/).slice(-1)[0].toLowerCase();
+    return la.localeCompare(lb) || a.localeCompare(b);
+  });
+}
+
+/* Applies saved fix-ups to the raw packing-list parse. Each unassigned bag
+ * consumes one of its parent's fix-ups; bags beyond the saved fix-ups stay
+ * unassigned (and keep their warning). Once the database itself is fixed the
+ * order no longer parses as unassigned, so a stale fix-up is simply inert —
+ * a student is never counted twice. */
+function effectivePacking() {
+  const rooms = new Map([...state.packing.rooms].map(([t, names]) => [t, names.slice()]));
+  const unassigned = [];
+  const applied = [];
+
+  const queues = new Map(); // parent (normalized) -> that parent's fix-ups, in saved order
+  for (const fx of state.settings.assignments || []) {
+    const key = normName(fx.parent);
+    if (!key || !fx.teacher || !String(fx.student || '').trim()) continue;
+    if (!queues.has(key)) queues.set(key, []);
+    queues.get(key).push(fx);
   }
-  return { rooms, unspecified };
+
+  for (const entry of state.packing.unassigned) {
+    const queue = queues.get(normName(entry.parent));
+    let remaining = entry.qty;
+    while (remaining > 0 && queue && queue.length) {
+      const fx = queue.shift();
+      if (!rooms.has(fx.teacher)) rooms.set(fx.teacher, []);
+      rooms.get(fx.teacher).push(fx.student);
+      applied.push({ parent: entry.parent, student: fx.student, teacher: fx.teacher, qty: 1 });
+      remaining--;
+    }
+    if (remaining > 0) unassigned.push({ room: entry.room, parent: entry.parent, student: entry.student, qty: remaining });
+  }
+
+  for (const names of rooms.values()) sortRosterNames(names);
+  return { rooms, unassigned, applied };
 }
 
 /* ============================ Label building ============================ */
@@ -466,13 +529,14 @@ RL.colW = RL.pageW / RL.cols;
 
 function rosterRooms() {
   const s = state.settings;
+  const packRooms = (state.packingEff || effectivePacking()).rooms;
   const out = [];
   for (const grade of s.grades.order) {
     const inGrade = s.teachers
-      .filter((t) => t.grade === grade && state.packing.rooms.has(t.name))
+      .filter((t) => t.grade === grade && packRooms.has(t.name))
       .sort((a, b) => a.name.localeCompare(b.name));
     for (const t of inGrade) {
-      const names = state.packing.rooms.get(t.name);
+      const names = packRooms.get(t.name);
       const adults = Math.max(0, Math.round(Number(t.adults)) || 0);
       out.push({
         teacher: t.name,
@@ -601,7 +665,7 @@ async function processPackingBuffer(buffer, name) {
       renderOutput(`No homerooms found in ${name} — is it the Booster Club Packing List Report?`);
       return;
     }
-    state.packing = { name, rooms: parsed.rooms, unspecified: parsed.unspecified };
+    state.packing = { name, rooms: parsed.rooms, unassigned: parsed.unassigned };
   } catch (e) {
     renderOutput(`Could not read ${name} as a Packing List PDF.`);
     return;
@@ -611,7 +675,10 @@ async function processPackingBuffer(buffer, name) {
 
 function reprocess() {
   state.mismatches = [];
-  if (!state.excel && !state.packing) { state.result = null; renderOutput(); return; }
+  if (!state.excel && !state.packing) { state.result = null; state.packingEff = null; renderOutput(); return; }
+
+  state.packingEff = state.packing ? effectivePacking() : null;
+  const eff = state.packingEff;
 
   let excelParsed = null;
   if (state.excel) {
@@ -629,22 +696,35 @@ function reprocess() {
   let parsed;
   if (excelParsed) {
     parsed = excelParsed;
+    // The Excel has the same homeroom-less rows the packing list does, just
+    // without parent names to match on. File each applied fix-up on this side
+    // too — capped at the rows actually missing a teacher, so a fix-up can
+    // never inflate the count once the database is corrected.
+    if (eff) {
+      for (const a of eff.applied) {
+        const take = Math.min(a.qty, parsed.missingTeacher.students);
+        if (!take) continue;
+        parsed.missingTeacher.students -= take;
+        parsed.orders.set(a.teacher, (parsed.orders.get(a.teacher) || 0) + take);
+      }
+    }
   } else {
-    const orders = new Map([...state.packing.rooms].map(([t, names]) => [t, names.length]));
+    const orders = new Map([...eff.rooms].map(([t, names]) => [t, names.length]));
+    const unassignedBags = eff.unassigned.reduce((a, e) => a + e.qty, 0);
     parsed = {
       orders,
-      missingTeacher: { students: state.packing.unspecified, rows: [] },
-      matchedRows: [...orders.values()].reduce((a, b) => a + b, 0) + state.packing.unspecified,
+      missingTeacher: { students: unassignedBags, rows: [] },
+      matchedRows: [...orders.values()].reduce((a, b) => a + b, 0) + unassignedBags,
     };
   }
 
   // With both files loaded, cross-check per-room counts (automates Jenine's
   // manual database-vs-roster reconciliation).
-  if (excelParsed && state.packing) {
-    const teachers = new Set([...parsed.orders.keys(), ...state.packing.rooms.keys()]);
+  if (excelParsed && eff) {
+    const teachers = new Set([...parsed.orders.keys(), ...eff.rooms.keys()]);
     for (const t of [...teachers].sort()) {
       const e = parsed.orders.get(t) || 0;
-      const p = (state.packing.rooms.get(t) || []).length;
+      const p = (eff.rooms.get(t) || []).length;
       if (e !== p) state.mismatches.push({ teacher: t, excel: e, packing: p });
     }
   }
@@ -727,7 +807,7 @@ function renderOutput(errorMsg) {
   const slots = [];
   if (state.excel) slots.push(`Order export: <strong>${esc(state.excel.name)}</strong> ✓`);
   if (state.packing) {
-    slots.push(`Packing list: <strong>${esc(state.packing.name)}</strong> ✓ (${state.packing.rooms.size} homerooms)`);
+    slots.push(`Packing list: <strong>${esc(state.packing.name)}</strong> ✓ (${state.packingEff.rooms.size} homerooms)`);
   }
   if (!state.packing) {
     slots.push(`<em>Add the Packing List Report PDF to also get roster labels with student names.</em>`);
@@ -783,17 +863,64 @@ function renderOutput(errorMsg) {
     warnings.appendChild(div);
   }
 
-  if (r.missingTeacher.students > 0) {
+  const eff = state.packingEff;
+
+  // Orders already filed by saved fix-ups — confirm what happened.
+  if (eff && eff.applied.length) {
+    const div = document.createElement('div');
+    div.className = 'warn ok';
+    const parts = eff.applied.map((a) =>
+      `<strong>${esc(a.student)}</strong> → ${esc(a.teacher)} (${esc(a.parent)}’s order)`);
+    div.innerHTML =
+      `Filed automatically by your saved fix-ups: ${parts.join('; ')}. ` +
+      `Manage fix-ups under Roster &amp; Settings.`;
+    warnings.appendChild(div);
+  }
+
+  // Orders with no homeroom — offer to file each one on the spot.
+  if (eff) {
+    for (const entry of eff.unassigned) {
+      const div = document.createElement('div');
+      div.className = 'warn';
+      const bags = entry.qty === 1 ? 'order' : `order (${entry.qty} bags)`;
+      const who = entry.parent ? `<strong>${esc(entry.parent)}</strong>’s ${bags}` : `An ${bags}`;
+      div.innerHTML =
+        `${who} has no homeroom in the Booster Club database, so it is <strong>not</strong> on any ` +
+        `label. Ask the Booster Club to fix the order — or, if you know the student, file it here: ` +
+        `<label>Student <input data-x="student" value="${esc(entry.student)}" placeholder="First Last" style="width:11em"></label> ` +
+        `<label>Homeroom <select data-x="teacher">${homeroomSelectHtml(entry.room !== 'UNSPECIFIED' && entry.room !== 'Unknown' ? entry.room : '')}</select></label> ` +
+        `<button class="btn small primary">File it</button>` +
+        (entry.parent ? ` <span class="mini-hint">Remembered — files automatically every week until the database is fixed. One fix-up per child.</span>` : '');
+      div.querySelector('button').onclick = () => {
+        const student = div.querySelector('[data-x=student]').value.trim();
+        const teacher = div.querySelector('[data-x=teacher]').value;
+        if (!entry.parent) { toast('This order has no parent name to match on — it can only be fixed in the database.', true); return; }
+        if (!student) { toast('Type the student’s name first.', true); return; }
+        if (!teacher) { toast('Pick the homeroom.', true); return; }
+        if (!Array.isArray(state.settings.assignments)) state.settings.assignments = [];
+        state.settings.assignments.push({ parent: entry.parent, student, teacher });
+        settingsEdited();
+        toast(`${student} filed under ${teacher}. This will happen automatically every week until the database is fixed.`);
+      };
+      warnings.appendChild(div);
+    }
+  }
+
+  // Excel-side missing homerooms not already covered by the per-order cards above
+  // (Excel-only, or the two files came from different database runs).
+  if (r.missingTeacher.students > 0 && (!eff || !eff.unassigned.length)) {
     const where = r.missingTeacher.rows.length
       ? `(spreadsheet row${r.missingTeacher.rows.length === 1 ? '' : 's'} ${esc(r.missingTeacher.rows.join(', '))}) `
-      : `(listed as UNSPECIFIED in the packing list) `;
+      : '';
     const div = document.createElement('div');
     div.className = 'warn';
     div.innerHTML =
       `<strong>${r.missingTeacher.students} student${r.missingTeacher.students === 1 ? '' : 's'}</strong> ` +
       where +
-      `have no homeroom specified. They are <strong>not</strong> on any label — ` +
-      `fix the export or hand-adjust a label after printing.`;
+      `in the Excel export have no homeroom specified. They are <strong>not</strong> on any label — ` +
+      (eff
+        ? `the packing list doesn’t show these orders, so the two files may be from different runs.`
+        : `drop the Packing List Report PDF here too to see whose orders these are and file them to the right homeroom.`);
     warnings.appendChild(div);
   }
 
@@ -909,7 +1036,51 @@ function renderSettingsTab() {
   renderVersionInfo();
   renderRoster();
   renderStaffLabels();
+  renderFixups();
   renderAdvanced();
+}
+
+function homeroomSelectHtml(selected) {
+  const s = state.settings;
+  let html = `<option value="">— pick homeroom —</option>`;
+  for (const g of s.grades.order) {
+    const inGrade = s.teachers.filter((t) => t.grade === g).sort((a, b) => a.name.localeCompare(b.name));
+    if (!inGrade.length) continue;
+    html += `<optgroup label="${esc(s.grades.pretty[g] || g)}">` +
+      inGrade.map((t) =>
+        `<option value="${esc(t.name)}"${t.name === selected ? ' selected' : ''}>${esc(t.name)}</option>`).join('') +
+      `</optgroup>`;
+  }
+  if (selected && !s.teachers.some((t) => t.name === selected)) {
+    html += `<option value="${esc(selected)}" selected>${esc(selected)} (not in roster)</option>`;
+  }
+  return html;
+}
+
+function renderFixups() {
+  const s = state.settings;
+  const list = Array.isArray(s.assignments) ? s.assignments : [];
+  $('#fixupsTable').hidden = !list.length;
+  $('#fixupsEmpty').hidden = !!list.length;
+  const tbody = $('#fixupsBody');
+  tbody.innerHTML = '';
+
+  list.forEach((fx, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td>${esc(fx.parent)}</td>` +
+      `<td><input data-f="student" value="${esc(fx.student || '')}"></td>` +
+      `<td><select data-f="teacher">${homeroomSelectHtml(fx.teacher)}</select></td>` +
+      `<td><button class="btn small danger" title="Remove">✕</button></td>`;
+    tr.querySelector('[data-f=student]').onchange = (e) => { fx.student = e.target.value.trim(); settingsEdited(); };
+    tr.querySelector('[data-f=teacher]').onchange = (e) => { fx.teacher = e.target.value; settingsEdited(); };
+    tr.querySelector('button').onclick = () => {
+      if (!confirm(`Remove the fix-up for ${fx.parent}’s order (${fx.student || 'no student'})?`)) return;
+      s.assignments.splice(idx, 1);
+      settingsEdited();
+    };
+    tbody.appendChild(tr);
+  });
 }
 
 function renderVersionInfo() {
@@ -1128,6 +1299,7 @@ async function init() {
   if (!state.settings.roster) {
     state.settings.roster = clone(defaults().roster || { footer: '' });
   }
+  if (!Array.isArray(state.settings.assignments)) state.settings.assignments = [];
 
   renderSettingsTab();
 
@@ -1143,6 +1315,11 @@ window.__popcorn = {
   processPackingArrayBuffer: (buf, name) => processPackingBuffer(buf, name),
   generateRosterPdfBase64: () => generateRosterPdf().output('datauristring').split(',')[1],
   getRosterRooms: () => rosterRooms(),
+  getPackingView: () => state.packingEff && {
+    rooms: Object.fromEntries([...state.packingEff.rooms].map(([t, n]) => [t, n.length])),
+    unassigned: state.packingEff.unassigned,
+    applied: state.packingEff.applied,
+  },
   getState: () => state,
   getSummary: () => state.result && {
     labels: state.result.labels.length,
