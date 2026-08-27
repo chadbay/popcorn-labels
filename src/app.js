@@ -36,6 +36,8 @@ const state = {
   dismissedVersion: null,
   excel: null,          // { name, buffer } — weekly order export (counts)
   packing: null,        // { name, rooms: Map<teacher, string[]>, unassigned } — raw packing-list parse
+  demo: false,          // example mode: made-up data loaded, persistence disabled
+  demoBackup: null,     // snapshot restored when example mode exits
   packingEff: null,     // packing after roster fix-ups: { rooms, unassigned, applied }
   result: null,         // output of buildResult()
   mismatches: [],       // rooms where Excel and packing-list counts disagree
@@ -66,6 +68,9 @@ function loadLocal() {
 }
 
 function saveLocal() {
+  // In example mode nothing may persist — the demo mutates settings freely
+  // (try-the-fix-up, add-a-teacher) and exiting restores the snapshot.
+  if (state.demo) return;
   try {
     localStorage.setItem(LS_KEY, JSON.stringify({
       settings: state.settings,
@@ -387,6 +392,72 @@ function effectivePacking() {
   return { rooms, unassigned, applied };
 }
 
+/* ============================ Example mode ============================ */
+/* "Show me what it looks like" from the Help tab: loads a full fake week —
+ * every student invented — through the real pipeline, so new volunteers see
+ * the exact post-upload screen (warnings included) without any real names.
+ * While it is active saveLocal() is a no-op and exiting restores a snapshot,
+ * so nothing done in the example can stick. */
+
+const DEMO_FIRST = ['Avery', 'Blake', 'Charlie', 'Dylan', 'Emerson', 'Finley', 'Georgia',
+  'Harper', 'Isla', 'Jordan', 'Kai', 'Luna', 'Mason', 'Nora', 'Oliver', 'Piper',
+  'Quinn', 'Riley', 'Sawyer', 'Teagan'];
+const DEMO_LAST = ['Applewhite', 'Birchwood', 'Cloverdale', 'Dewberry', 'Everhart',
+  'Foxworth', 'Greenfield', 'Hollis', 'Ivywood', 'Juniper', 'Kingfield', 'Lakewood',
+  'Maplebrook', 'Northgate', 'Oakhurst', 'Pinehurst', 'Quimby', 'Ridgeway',
+  'Summerfield', 'Thornbury'];
+
+function demoStudents(teacher, n) {
+  const seed = [...teacher].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push(DEMO_FIRST[(seed + i * 7) % 20] + ' ' + DEMO_LAST[(seed * 3 + i * 3) % 20]);
+  }
+  return out;
+}
+
+function startDemo() {
+  if (state.demo) return;
+  state.demoBackup = {
+    settingsJson: JSON.stringify(state.settings),
+    excel: state.excel,
+    packing: state.packing,
+  };
+  state.demo = true;
+
+  const rooms = new Map();
+  for (const t of state.settings.teachers) {
+    const seed = [...t.name].reduce((a, c) => a + c.charCodeAt(0), 0);
+    rooms.set(t.name, demoStudents(t.name, 11 + (seed % 10)));
+  }
+  // One room that is not in the roster, so the "add this teacher" warning shows.
+  rooms.set('Ms. Example', demoStudents('Ms. Example', 9));
+  state.excel = null;
+  state.packing = {
+    name: 'example_packing_list.pdf (every student made up)',
+    rooms,
+    // One order with no homeroom, so the "File it" fix-up warning shows.
+    unassigned: [{ room: 'UNSPECIFIED', parent: 'Pat Example', student: '', qty: 1 }],
+  };
+
+  $('#demoBar').hidden = false;
+  document.querySelector('nav [data-tab=make]').click();
+  reprocess();
+  window.scrollTo(0, 0);
+}
+
+function clearDemo(reprocessAfter) {
+  if (!state.demo) return;
+  state.settings = JSON.parse(state.demoBackup.settingsJson);
+  state.excel = state.demoBackup.excel;
+  state.packing = state.demoBackup.packing;
+  state.demoBackup = null;
+  state.demo = false;
+  $('#demoBar').hidden = true;
+  renderSettingsTab();
+  if (reprocessAfter !== false) reprocess();
+}
+
 /* ============================ Label building ============================ */
 
 function classroomLines(teacher, gradePretty, students, adults) {
@@ -510,7 +581,7 @@ function pdfFileName() {
 
 function downloadPdf() {
   if (!state.result || !state.result.labels.length) return;
-  generatePdf().save(pdfFileName());
+  generatePdf().save((state.demo ? 'EXAMPLE_' : '') + pdfFileName());
 }
 
 /* ============================ Roster labels PDF ============================ */
@@ -648,7 +719,7 @@ function rosterFileName() {
 
 function downloadRosterPdf() {
   if (!state.packing) return;
-  generateRosterPdf().save(rosterFileName());
+  generateRosterPdf().save((state.demo ? 'EXAMPLE_' : '') + rosterFileName());
 }
 
 /* ============================ Processing pipeline ============================ */
@@ -735,6 +806,10 @@ function reprocess() {
 
 function handleFiles(files) {
   if (!files || !files.length) return;
+  // Dropping real files ends the example so nothing real lands in demo state.
+  if (state.demo && [...files].some((f) => /\.(xlsx|xlsm|xls|pdf)$/i.test(f.name))) {
+    clearDemo(false);
+  }
   let routed = false;
   for (const file of files) {
     if (/\.(xlsx|xlsm|xls)$/i.test(file.name)) {
@@ -900,7 +975,9 @@ function renderOutput(errorMsg) {
         if (!Array.isArray(state.settings.assignments)) state.settings.assignments = [];
         state.settings.assignments.push({ parent: entry.parent, student, teacher });
         settingsEdited();
-        toast(`${student} filed under ${teacher}. This will happen automatically every week until the database is fixed.`);
+        toast(state.demo
+          ? `${student} filed under ${teacher} — example only, nothing is saved.`
+          : `${student} filed under ${teacher}. This will happen automatically every week until the database is fixed.`);
       };
       warnings.appendChild(div);
     }
@@ -1274,6 +1351,8 @@ async function init() {
   $('#importInput').onchange = (e) => { if (e.target.files[0]) importSettingsFile(e.target.files[0]); e.target.value = ''; };
   $('#shareBtn').onclick = copyShareLink;
   $('#resetBtn').onclick = resetToDefaults;
+  $('#demoBtn').onclick = startDemo;
+  $('#demoExitBtn').onclick = clearDemo;
 
   // Layer 1: settings.json committed next to the app (source of truth for defaults).
   try {
@@ -1315,6 +1394,8 @@ window.__popcorn = {
   processPackingArrayBuffer: (buf, name) => processPackingBuffer(buf, name),
   generateRosterPdfBase64: () => generateRosterPdf().output('datauristring').split(',')[1],
   getRosterRooms: () => rosterRooms(),
+  startDemo: () => startDemo(),
+  clearDemo: () => clearDemo(),
   getPackingView: () => state.packingEff && {
     rooms: Object.fromEntries([...state.packingEff.rooms].map(([t, n]) => [t, n.length])),
     unassigned: state.packingEff.unassigned,

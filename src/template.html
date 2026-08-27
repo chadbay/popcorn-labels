@@ -87,6 +87,12 @@
   }
   .warn.error { background: var(--err-bg); border-color: var(--err-line); }
   .warn.ok { background: #eef7e9; border-color: #b8d6a8; }
+  #demoBar[hidden] { display: none; }
+  #demoBar {
+    background: #e8effa; border: 1px solid #9db8e0; border-radius: 10px;
+    padding: 10px 14px; margin: 14px 0 4px; font-size: 15px;
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;
+  }
   .warn label { margin: 0 8px; white-space: nowrap; }
   .warn .mini-hint { display: block; color: #6b6152; font-size: 13px; margin-top: 4px; }
   .note { color: #6b6152; font-size: 13.5px; }
@@ -177,6 +183,11 @@
         Drop both at once or one at a time — nothing is uploaded, files stay on this computer</div>
       <input id="fileInput" type="file" accept=".xlsx,.xlsm,.xls,.pdf" multiple hidden>
     </div>
+    <div id="demoBar" hidden>
+      <span>👀 This is <strong>example data</strong> — every student and parent below is made up.
+        Nothing you do here is saved. Drop this week's real files anytime to start for real.</span>
+      <button id="demoExitBtn" class="btn small">Exit example</button>
+    </div>
     <div id="fileStatus"></div>
     <div id="warnings"></div>
     <div id="totals"></div>
@@ -259,6 +270,18 @@
   </section>
 
   <section id="tab-help" hidden>
+    <section>
+      <h2>See it in action (no real data needed)</h2>
+      <p>Want to see what the screen looks like after the files are dropped — or walk a new
+         volunteer through it? Load a complete example week where <strong>every student name is
+         made up</strong>:</p>
+      <p><button id="demoBtn" class="btn primary">Show me an example</button></p>
+      <p>You'll see the file check, the warnings you might get (a teacher missing from the
+         roster, and an order with no homeroom — try the “File it” fix on it), the bag totals,
+         both label previews, and working Download buttons (example PDFs are named
+         <code>EXAMPLE_…</code> so they can't be mistaken for the real ones). Nothing you do in
+         the example is saved, and dropping real files ends it automatically.</p>
+    </section>
     <section>
       <h2>Weekly routine (2 minutes)</h2>
       <ol>
