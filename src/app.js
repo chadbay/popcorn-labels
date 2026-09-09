@@ -588,15 +588,26 @@ function downloadPdf() {
 /* Jenine's combined label+roster format: letter pages printed on full-sheet
  * 8.5x11 label stock, three homeroom strips per page separated by two cuts.
  * Each strip: "KG:  Aune" / "TOTAL BAGS:  24" / student names /
- * "23 STUDENTS/1 TEACHER" / footer. Staff labels follow, two per row. */
+ * "23 STUDENTS/1 TEACHER" / footer. Staff labels follow, two per row.
+ * The sheet is landscape by default (wider strips); portrait is a setting. */
 
-const RL = {
-  pageW: 612, pageH: 792,
+const RL_BASE = {
   cols: 3,
   headerY: 46, totalY: 70, namesY: 102,
   tailGap: 24, footerGap: 18, bottomMargin: 36,
 };
-RL.colW = RL.pageW / RL.cols;
+
+function rosterOrientation() {
+  const r = state.settings && state.settings.roster;
+  return r && r.orientation === 'portrait' ? 'portrait' : 'landscape';
+}
+
+function rosterLayout() {
+  const landscape = rosterOrientation() === 'landscape';
+  const L = Object.assign({}, RL_BASE, { pageW: landscape ? 792 : 612, pageH: landscape ? 612 : 792 });
+  L.colW = L.pageW / L.cols;
+  return L;
+}
 
 function rosterRooms() {
   const s = state.settings;
@@ -631,7 +642,13 @@ function drawCutLines(doc, xs, y1, y2) {
 
 function generateRosterPdf() {
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit: 'pt', format: [RL.pageW, RL.pageH], compress: true });
+  const RL = rosterLayout();
+  const doc = new jsPDF({
+    unit: 'pt',
+    format: [RL.pageW, RL.pageH],
+    orientation: RL.pageW > RL.pageH ? 'landscape' : 'portrait',
+    compress: true,
+  });
   const rooms = rosterRooms();
   const footer = (state.settings.roster && state.settings.roster.footer) || '';
   const maxW = RL.colW - 18;
@@ -1022,8 +1039,9 @@ function renderRosterPreview() {
   const preview = $('#preview');
   const rooms = rosterRooms();
   if (!rooms.length) return;
+  const RL = rosterLayout();
   const h = document.createElement('h3');
-  h.textContent = 'Roster labels preview (3 per sheet — 2 cuts)';
+  h.textContent = `Roster labels preview (${rosterOrientation()} sheet, 3 per sheet — 2 cuts)`;
   preview.appendChild(h);
 
   const SCALE = 0.55; // px per pt
@@ -1302,6 +1320,12 @@ function renderAdvanced() {
   $('#advRosterFooter').onchange = (e) => {
     if (!state.settings.roster) state.settings.roster = {};
     state.settings.roster.footer = e.target.value.trim();
+    settingsEdited();
+  };
+  $('#rosterOrientation').value = rosterOrientation();
+  $('#rosterOrientation').onchange = (e) => {
+    if (!state.settings.roster) state.settings.roster = {};
+    state.settings.roster.orientation = e.target.value === 'portrait' ? 'portrait' : 'landscape';
     settingsEdited();
   };
 }

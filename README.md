@@ -10,8 +10,9 @@ terminal, or code editing is needed. Two outputs:
 - **Roster labels** (from the Booster Club *Packing List Report* PDF) — the
   combined label+roster format: grade/teacher header, `TOTAL BAGS`, the
   participating students' names, `N STUDENTS/M TEACHER(S)`, and a footer.
-  Printed on full-sheet 8.5″ × 11″ label stock, three homeroom strips per page
-  (two cuts along the printed dashed guides), staff labels two-across after.
+  Printed on full-sheet 8.5″ × 11″ label stock — landscape by default, portrait
+  via Roster & Settings — three homeroom strips per page (two cuts along the
+  printed dashed guides), staff labels two-across after.
 
 Everything runs inside the browser — neither file is uploaded anywhere.
 
