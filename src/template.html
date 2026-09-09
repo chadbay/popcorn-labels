@@ -254,6 +254,20 @@
        They are <strong>never</strong> included in “Export settings” — no student names end up in the
        website’s public files.</p>
 
+    <h2>Roster labels</h2>
+    <fieldset>
+      <label>Sheet orientation
+        <select id="rosterOrientation">
+          <option value="landscape">Landscape (11″ wide — wider strips)</option>
+          <option value="portrait">Portrait (8.5″ wide — taller strips)</option>
+        </select></label>
+      <div class="hint">Either way it's 3 homeroom strips per full sheet with 2 cuts. Landscape gives
+        wider strips for long names; portrait fits more names before the text shrinks.</div>
+      <label>Footer line<br>
+        <input id="advRosterFooter" style="width:26em"></label>
+      <div class="hint">Printed in bold at the bottom of every roster label.</div>
+    </fieldset>
+
     <h2>Advanced — only touch if the export format changes</h2>
     <fieldset>
       <label>Popcorn item codes (comma-separated)<br>
@@ -263,9 +277,6 @@
       <label>Student count column <input id="advQtyCol" class="col-input"></label>
       <label>First data row <input id="advFirstRow" type="number" min="1" style="width:4.5em"></label>
       <div class="hint">Columns are Excel letters (A, B, C…). Rows above “First data row” are skipped as headers.</div>
-      <label>Roster label footer<br>
-        <input id="advRosterFooter" style="width:26em"></label>
-      <div class="hint">Printed in bold at the bottom of every roster label.</div>
     </fieldset>
   </section>
 
@@ -292,9 +303,9 @@
             or the two files disagreeing on counts.</li>
         <li><strong>Bag labels PDF</strong> — print on <strong>Avery 5163/5963</strong> label sheets
             (2″ × 4″, 10 per sheet).</li>
-        <li><strong>Roster labels PDF</strong> — print on <strong>full-sheet 8.5″ × 11″ label stock</strong>,
-            then make 2 vertical cuts per sheet to separate the 3 homeroom strips
-            (staff labels follow on their own sheets, 2 across).</li>
+        <li><strong>Roster labels PDF</strong> — print on <strong>full-sheet 8.5″ × 11″ label stock</strong>
+            (landscape by default; switch to portrait under Roster &amp; Settings), then make 2 cuts
+            per sheet to separate the 3 homeroom strips (staff labels follow on their own sheets, 2 across).</li>
         <li>In every print dialog choose <strong>Actual size / 100%</strong> — never “Fit to page”.</li>
       </ol>
       <p>Only have one of the two files? That still works: the Excel alone makes bag labels;
