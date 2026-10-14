@@ -40,7 +40,9 @@ const state = {
   demoBackup: null,     // snapshot restored when example mode exits
   packingEff: null,     // packing after roster fix-ups: { rooms, unassigned, applied }
   result: null,         // output of buildResult()
-  mismatches: [],       // rooms where Excel and packing-list counts disagree
+  mismatches: [],       // rooms where Excel and packing-list counts disagree, with the why
+  usePackingCount: new Set(), // rooms whose bag label takes the packing-list count (this week's files only)
+  reconcile: null,      // homeroom-less order totals in each file: { excelMissing, packingMissing }
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -241,22 +243,31 @@ function parseWorkbook(buffer) {
   const orders = new Map(); // teacher name -> student count
   const missingTeacher = { students: 0, rows: [] };
   let matchedRows = 0;
+  // For explaining a count mismatch: the rows behind each teacher's count, and
+  // rows whose item code looks like popcorn but isn't one the app counts.
+  const rowsByTeacher = new Map();  // teacher -> [{ row, item, qty }]
+  const otherPopcorn = new Map();   // teacher -> [{ row, item, qty }]
+  const push = (map, k, v) => { if (!map.has(k)) map.set(k, []); map.get(k).push(v); };
 
   for (let r = first - 1; r < rows.length; r++) {
     const row = rows[r] || [];
     const item = row[iCol] == null ? '' : String(row[iCol]).trim();
-    if (!codes.includes(item)) continue;
-    matchedRows++;
     const qty = Math.round(Number(row[qCol])) || 0;
     const teacher = row[tCol] == null ? '' : String(row[tCol]).trim();
+    if (!codes.includes(item)) {
+      if (/pop/i.test(item)) push(otherPopcorn, teacher, { row: r + 1, item, qty });
+      continue;
+    }
+    matchedRows++;
     if (!teacher || teacher === 'Unknown') {
       missingTeacher.students += qty;
       missingTeacher.rows.push(r + 1);
     } else {
       orders.set(teacher, (orders.get(teacher) || 0) + qty);
+      push(rowsByTeacher, teacher, { row: r + 1, item, qty });
     }
   }
-  return { orders, missingTeacher, matchedRows, totalRows: rows.length };
+  return { orders, missingTeacher, matchedRows, totalRows: rows.length, rowsByTeacher, otherPopcorn };
 }
 
 /* ============================ Packing-list PDF parsing ============================ */
@@ -419,6 +430,16 @@ function effectivePacking() {
  * on the app (or "Import list") reads it back, so the list can be moved
  * between computers or kept as a backup without ever touching settings.json. */
 
+/* Excel on Windows saves "CSV" in the Windows-1252 code page unless told to
+ * use UTF-8, so a name like José only reads right if we fall back to it. */
+function decodeCsv(buffer) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+  } catch (e) {
+    return new TextDecoder('windows-1252').decode(buffer);
+  }
+}
+
 function parseExtrasCsv(text) {
   const wb = XLSX.read(text, { type: 'string' });
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' })
@@ -426,11 +447,12 @@ function parseExtrasCsv(text) {
     .filter((r) => r.some(Boolean));
   if (!rows.length) return [];
   // Header row optional: look for Student/Name and Teacher/Homeroom columns,
-  // otherwise column A is the student and column B the teacher.
+  // otherwise column A is the student and column B the teacher. Headers must
+  // match whole, so a kid or teacher in the first row isn't taken for one.
   let sCol = 0, tCol = 1, start = 0;
-  const head = rows[0].map((c) => c.toLowerCase());
-  const hs = head.findIndex((c) => /student|name|child/.test(c));
-  const ht = head.findIndex((c) => /teacher|homeroom|room/.test(c));
+  const head = rows[0].map((c) => c.toLowerCase().replace(/[^a-z ]/g, '').trim());
+  const hs = head.findIndex((c) => /^(student|student name|students|name|child|kid)$/.test(c));
+  const ht = head.findIndex((c) => /^(teacher|teacher name|homeroom|homeroom teacher|room|class|classroom)$/.test(c));
   if (hs >= 0 || ht >= 0) {
     if (hs >= 0) sCol = hs;
     if (ht >= 0) tCol = ht;
@@ -447,11 +469,18 @@ function rosterTeacherFor(raw) {
   const key = normName(raw).replace(/^(miss|mrs?|ms|mx|dr)\.?\s+/, '');
   if (!key) return null;
   const t = state.settings.teachers.find((t) => normName(t.name) === key);
-  return t ? t.name : null;
+  if (t) return t.name;
+  // "Hurst" or "Mrs. Judy Hurst" for a roster entry "Judy Hurst" — by last
+  // name, but only when exactly one teacher has it.
+  const last = (n) => normName(n).split(' ').slice(-1)[0];
+  const byLast = state.settings.teachers.filter((t) => last(t.name) === last(key));
+  return byLast.length === 1 ? byLast[0].name : null;
 }
 
-/* Adds the file's kids to the Extra students list (skipping ones already on
- * it) and reports any whose teacher isn't in the roster. */
+/* Adds the file's kids to the Extra students list, skipping ones already on
+ * it. A kid whose teacher isn't in the roster is still added, with no
+ * homeroom picked yet, so nobody is dropped; they stay off the labels (with a
+ * warning) until a homeroom is picked. */
 function importExtrasText(text, name) {
   let rows;
   try { rows = parseExtrasCsv(text); } catch (e) { rows = null; }
@@ -461,16 +490,19 @@ function importExtrasText(text, name) {
   let added = 0, already = 0;
   const unmatched = [];
   for (const r of rows) {
-    const teacher = rosterTeacherFor(r.teacher);
-    if (!teacher) { unmatched.push(`${r.student} (“${r.teacher || 'no teacher'}”)`); continue; }
-    if (list.some((x) => normName(x.student) === normName(r.student) && x.teacher === teacher)) { already++; continue; }
-    list.push({ student: r.student, teacher });
+    const teacher = rosterTeacherFor(r.teacher) || '';
+    // Same kid and homeroom is a repeat. With no roster match, any entry with
+    // that name counts (e.g. imported before and a homeroom picked since).
+    if (list.some((x) => normName(x.student) === normName(r.student) && (!teacher || x.teacher === teacher))) { already++; continue; }
+    const entry = { student: r.student, teacher };
+    if (!teacher) { entry.typedTeacher = r.teacher; unmatched.push(`${r.student} (“${r.teacher || 'no teacher'}”)`); }
+    list.push(entry);
     added++;
   }
   settingsEdited();
   toast(`Extra students from ${name}: ${added} added` +
     (already ? `, ${already} already on the list` : '') +
-    (unmatched.length ? `. Not added — teacher not in the roster: ${unmatched.join('; ')}` : '') + '.',
+    (unmatched.length ? `. Pick a homeroom under Roster & Settings for: ${unmatched.join('; ')}` : '') + '.',
     unmatched.length > 0);
 }
 
@@ -483,10 +515,12 @@ function exportExtras() {
   };
   const cell = (v) => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
   const csv = ['Student,Teacher,Grade']
-    .concat(list.map((x) => [x.student, x.teacher, gradeOf(x.teacher)].map((v) => cell(String(v || ''))).join(',')))
+    .concat(list.map((x) => [x.student, x.teacher || x.typedTeacher, gradeOf(x.teacher)]
+      .map((v) => cell(String(v || ''))).join(',')))
     .join('\r\n') + '\r\n';
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  // The byte-order mark makes Excel open the file as UTF-8 (accents intact).
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv' }));
   a.download = 'extra-students.csv';
   a.click();
   URL.revokeObjectURL(a.href);
@@ -531,6 +565,10 @@ function startDemo() {
     packing: state.packing,
   };
   state.demo = true;
+  // Real extra students would land on the made-up rosters; the snapshot
+  // above brings them back when the example ends.
+  state.settings.extras = [];
+  state.usePackingCount.clear();
 
   const rooms = new Map();
   for (const t of state.settings.teachers) {
@@ -558,6 +596,7 @@ function clearDemo(reprocessAfter) {
   state.settings = JSON.parse(state.demoBackup.settingsJson);
   state.excel = state.demoBackup.excel;
   state.packing = state.demoBackup.packing;
+  state.usePackingCount.clear();
   state.demoBackup = null;
   state.demo = false;
   $('#demoBar').hidden = true;
@@ -850,6 +889,7 @@ function downloadRosterPdf() {
 
 function processExcelBuffer(buffer, name) {
   state.excel = { name, buffer };
+  state.usePackingCount.clear(); // a choice made for last week's files doesn't carry over
   reprocess();
 }
 
@@ -861,6 +901,7 @@ async function processPackingBuffer(buffer, name) {
       return;
     }
     state.packing = { name, rooms: parsed.rooms, unassigned: parsed.unassigned };
+    state.usePackingCount.clear();
   } catch (e) {
     renderOutput(`Could not read ${name} as a Packing List PDF.`);
     return;
@@ -870,6 +911,7 @@ async function processPackingBuffer(buffer, name) {
 
 function reprocess() {
   state.mismatches = [];
+  state.reconcile = null;
   if (!state.excel && !state.packing) { state.result = null; state.packingEff = null; renderOutput(); return; }
 
   state.packingEff = state.packing ? effectivePacking() : null;
@@ -889,6 +931,8 @@ function reprocess() {
   // Bag-label counts come from the Excel when present (the official export),
   // otherwise from counting packing-list rows — verified to be the same data.
   let parsed;
+  const excelFiled = [];   // fix-ups also moved on the Excel side: { teacher, qty }
+  const excelUnfiled = []; // fix-ups on the roster with no homeroom-less Excel row left to move
   if (excelParsed) {
     parsed = excelParsed;
     // The Excel has the same homeroom-less rows the packing list does, just
@@ -896,11 +940,17 @@ function reprocess() {
     // too — capped at the rows actually missing a teacher, so a fix-up can
     // never inflate the count once the database is corrected.
     if (eff) {
+      state.reconcile = {
+        excelMissing: parsed.missingTeacher.students,
+        packingMissing: state.packing.unassigned.reduce((a, e) => a + e.qty, 0),
+      };
       for (const a of eff.applied) {
         const take = Math.min(a.qty, parsed.missingTeacher.students);
+        if (take < a.qty) excelUnfiled.push({ ...a, qty: a.qty - take });
         if (!take) continue;
         parsed.missingTeacher.students -= take;
         parsed.orders.set(a.teacher, (parsed.orders.get(a.teacher) || 0) + take);
+        excelFiled.push({ teacher: a.teacher, qty: take });
       }
     }
     // Extra students are in neither file; each adds one bag to their room.
@@ -918,13 +968,34 @@ function reprocess() {
   }
 
   // With both files loaded, cross-check per-room counts (automates Jenine's
-  // manual database-vs-roster reconciliation).
+  // manual database-vs-roster reconciliation). Each mismatch carries what went
+  // into both numbers so the volunteer can see why, and can choose to have the
+  // bag label use the packing-list count, which has the names behind it.
   if (excelParsed && eff) {
     const teachers = new Set([...parsed.orders.keys(), ...eff.rooms.keys()]);
+    const sum = (list) => list.reduce((a, x) => a + (x.qty || 1), 0);
     for (const t of [...teachers].sort()) {
       const e = parsed.orders.get(t) || 0;
       const p = (eff.rooms.get(t) || []).length;
-      if (e !== p) state.mismatches.push({ teacher: t, excel: e, packing: p });
+      if (e === p) continue;
+      const m = {
+        teacher: t, excel: e, packing: p,
+        excelRows: excelParsed.rowsByTeacher.get(t) || [],
+        excelOther: excelParsed.otherPopcorn.get(t) || [],
+        excelFiled: sum(excelFiled.filter((x) => x.teacher === t)),
+        unfiled: excelUnfiled.filter((x) => x.teacher === t),
+        pdfNames: (state.packing.rooms.get(t) || []).length,
+        fixups: sum(eff.applied.filter((x) => x.teacher === t)),
+        extras: eff.extras.filter((x) => x.teacher === t).length,
+        usingPacking: false,
+      };
+      // Offered only when the packing list has names for the room: a zero
+      // there more likely means a missing page than an empty classroom.
+      if (p > 0 && state.usePackingCount.has(t)) {
+        parsed.orders.set(t, p);
+        m.usingPacking = true;
+      }
+      state.mismatches.push(m);
     }
   }
 
@@ -935,7 +1006,7 @@ function reprocess() {
 function handleFiles(files) {
   if (!files || !files.length) return;
   // Dropping real files ends the example so nothing real lands in demo state.
-  if (state.demo && [...files].some((f) => /\.(xlsx|xlsm|xls|pdf)$/i.test(f.name))) {
+  if (state.demo && [...files].some((f) => /\.(xlsx|xlsm|xls|pdf|csv)$/i.test(f.name))) {
     clearDemo(false);
   }
   let routed = false;
@@ -947,8 +1018,8 @@ function handleFiles(files) {
       routed = true;
     } else if (/\.csv$/i.test(file.name)) {
       const reader = new FileReader();
-      reader.onload = () => importExtrasText(reader.result, file.name);
-      reader.readAsText(file);
+      reader.onload = () => importExtrasText(decodeCsv(reader.result), file.name);
+      reader.readAsArrayBuffer(file);
       routed = true;
     } else if (/\.pdf$/i.test(file.name)) {
       const reader = new FileReader();
@@ -1024,18 +1095,7 @@ function renderOutput(errorMsg) {
   }
   status.innerHTML = `<div class="file-ok">${slots.join('<br>')}</div>`;
 
-  if (state.mismatches.length) {
-    const rows = state.mismatches
-      .map((m) => `<strong>${esc(m.teacher)}</strong> (Excel says ${m.excel}, packing list says ${m.packing})`)
-      .join('; ');
-    const div = document.createElement('div');
-    div.className = 'warn error';
-    div.innerHTML =
-      `The two files disagree on student counts for: ${rows}. ` +
-      `The bag labels use the Excel counts — check with the Booster Club which is right. ` +
-      `Roster labels list the packing-list names.`;
-    warnings.appendChild(div);
-  }
+  renderMismatches(warnings);
 
   if (r.matchedRows === 0) {
     warnings.innerHTML =
@@ -1094,6 +1154,18 @@ function renderOutput(errorMsg) {
     div.innerHTML =
       `Added as extra students (not in the Booster Club), one bag each: ${parts.join('; ')}. ` +
       `Manage them under Roster &amp; Settings.`;
+    warnings.appendChild(div);
+  }
+
+  const noRoom = (state.settings.extras || []).filter((x) => String(x.student || '').trim() && !x.teacher);
+  if (noRoom.length) {
+    const div = document.createElement('div');
+    div.className = 'warn';
+    div.innerHTML =
+      `Extra student${noRoom.length === 1 ? '' : 's'} with no homeroom picked, so <strong>not</strong> on any label: ` +
+      noRoom.map((x) => `<strong>${esc(x.student)}</strong>` +
+        (x.typedTeacher ? ` (the file said “${esc(x.typedTeacher)}”)` : '')).join('; ') +
+      `. Pick the homeroom under Roster &amp; Settings → Extra students.`;
     warnings.appendChild(div);
   }
 
@@ -1161,6 +1233,102 @@ function renderOutput(errorMsg) {
   rosterBtn.hidden = !state.packing;
   renderPreview();
   if (state.packing) renderRosterPreview();
+}
+
+/* ============================ Rendering: count mismatches ============================ */
+/* One card per room where the Excel and the packing list disagree: both
+ * numbers, the most likely reason in plain words, what went into each count,
+ * and a button to make the bag label match the roster (packing-list) count.
+ * The choice lasts until new weekly files are dropped. */
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + 's')}`;
+
+function mismatchReason(m) {
+  const rc = state.reconcile || { excelMissing: 0, packingMissing: 0 };
+  const unfiled = m.unfiled.reduce((a, x) => a + x.qty, 0);
+  if (unfiled && m.excel + unfiled === m.packing) {
+    const who = m.unfiled.map((x) => `<strong>${esc(x.student)}</strong>`).join(', ');
+    return `${who} ${m.unfiled.length === 1 ? 'was' : 'were'} filed here by your saved fix-ups, so they’re on ` +
+      `the roster label but not the bag label. The Excel export has no names, and it has only ` +
+      `${plural(rc.excelMissing, 'order')} with no homeroom to the packing list’s ${rc.packingMissing}, so it had ` +
+      `nothing left to move here. The files were probably downloaded at different times. The packing list ` +
+      `has the names, so trust its count.`;
+  }
+  if (m.excelOther.length) {
+    const rows = m.excelOther.map((x) => `row ${x.row} (${esc(x.item)}: ${x.qty})`).join(', ');
+    return `The Excel export has ${rows} for this teacher with an item code the app doesn’t count. ` +
+      `If that’s popcorn, add the code under Roster &amp; Settings → Advanced and the counts will match.`;
+  }
+  if (m.packing === 0) {
+    return `The packing list has no names for this room. Make sure it’s the full Packing List Report ` +
+      `(every page), or download it again.`;
+  }
+  return `The two files were probably downloaded at different times, with an order added, changed or ` +
+    `cancelled in between. Download both again and drop them in together. Or, if the names on the ` +
+    `roster label look right, use the packing-list count.`;
+}
+
+function mismatchBreakdown(m) {
+  const add = (parts, total) => parts.join(' + ') + (parts.length > 1 ? ` = ${total}` : '');
+  const pack = [`${plural(m.pdfNames, 'name')} in the PDF`];
+  if (m.fixups) pack.push(`${m.fixups} filed by fix-ups`);
+  if (m.extras) pack.push(plural(m.extras, 'extra student'));
+  const xl = m.excelRows.length
+    ? m.excelRows.map((x) => `${x.qty} in row ${x.row}`)
+    : ['no rows for this teacher'];
+  if (m.excelFiled) xl.push(`${m.excelFiled} moved by fix-ups`);
+  if (m.extras) xl.push(plural(m.extras, 'extra student'));
+  return `Where the numbers come from: packing list ${add(pack, m.packing)}; Excel ${add(xl, m.excel)}.`;
+}
+
+function renderMismatches(warnings) {
+  const open = state.mismatches.filter((m) => !m.usingPacking);
+  const fixed = state.mismatches.filter((m) => m.usingPacking);
+  const choose = (teachers, on) => {
+    for (const t of teachers) {
+      if (on) state.usePackingCount.add(t); else state.usePackingCount.delete(t);
+    }
+    reprocess();
+  };
+
+  for (const m of open) {
+    const div = document.createElement('div');
+    div.className = 'warn error';
+    div.innerHTML =
+      `<strong>${esc(m.teacher)}</strong>: the bag label says ${plural(m.excel, 'student')} (Excel export), but ` +
+      `the roster label lists ${plural(m.packing, 'name')} (packing list). ${mismatchReason(m)}` +
+      (m.packing > 0
+        ? ` <button class="btn small primary">Use ${m.packing} on ${esc(m.teacher)}’s bag label</button>`
+        : '') +
+      `<span class="mini-hint">${mismatchBreakdown(m)}</span>`;
+    const btn = div.querySelector('button');
+    if (btn) btn.onclick = () => choose([m.teacher], true);
+    warnings.appendChild(div);
+  }
+
+  const fixable = open.filter((m) => m.packing > 0);
+  if (fixable.length > 1) {
+    const div = document.createElement('div');
+    div.className = 'warn error';
+    div.innerHTML = `<button class="btn small primary">Use the packing-list count for ` +
+      `${esc(fixable.map((m) => m.teacher).join(', '))}</button>`;
+    div.querySelector('button').onclick = () => choose(fixable.map((m) => m.teacher), true);
+    warnings.appendChild(div);
+  }
+
+  if (fixed.length) {
+    const div = document.createElement('div');
+    div.className = 'warn ok';
+    div.innerHTML = `Bag labels use the packing-list count, matching the roster labels, for: ` +
+      fixed.map((m, i) =>
+        `<strong>${esc(m.teacher)}</strong> ${m.packing} (Excel said ${m.excel}) ` +
+        `<button class="btn small" data-i="${i}">Undo</button>`).join('; ') +
+      `.<span class="mini-hint">Only for these files. It resets when you drop new ones.</span>`;
+    div.querySelectorAll('button[data-i]').forEach((b) => {
+      b.onclick = () => choose([fixed[Number(b.dataset.i)].teacher], false);
+    });
+    warnings.appendChild(div);
+  }
 }
 
 function renderRosterPreview() {
@@ -1320,10 +1488,16 @@ function renderExtras() {
     const tr = document.createElement('tr');
     tr.innerHTML =
       `<td><input data-f="student" value="${esc(x.student || '')}"></td>` +
-      `<td><select data-f="teacher">${homeroomSelectHtml(x.teacher)}</select></td>` +
+      `<td><select data-f="teacher">${homeroomSelectHtml(x.teacher)}</select>` +
+      (!x.teacher && x.typedTeacher ? `<div class="mini-hint">File said “${esc(x.typedTeacher)}”</div>` : '') +
+      `</td>` +
       `<td><button class="btn small danger" title="Remove">✕</button></td>`;
     tr.querySelector('[data-f=student]').onchange = (e) => { x.student = e.target.value.trim(); settingsEdited(); };
-    tr.querySelector('[data-f=teacher]').onchange = (e) => { x.teacher = e.target.value; settingsEdited(); };
+    tr.querySelector('[data-f=teacher]').onchange = (e) => {
+      x.teacher = e.target.value;
+      if (x.teacher) delete x.typedTeacher;
+      settingsEdited();
+    };
     tr.querySelector('button').onclick = () => {
       if (!confirm(`Remove ${x.student || 'this student'} from the extra students?`)) return;
       list.splice(idx, 1);
@@ -1338,6 +1512,10 @@ function renderExtras() {
     const teacher = $('#newExtraTeacher').value;
     if (!student) { toast('Type the student’s name first.', true); return; }
     if (!teacher) { toast('Pick the homeroom.', true); return; }
+    if (list.some((x) => normName(x.student) === normName(student) && x.teacher === teacher)) {
+      toast(`${student} is already on the list for ${teacher}.`, true);
+      return;
+    }
     list.push({ student, teacher });
     $('#newExtraStudent').value = '';
     settingsEdited();
@@ -1350,8 +1528,8 @@ function renderExtras() {
     e.target.value = '';
     if (!f) return;
     const reader = new FileReader();
-    reader.onload = () => importExtrasText(reader.result, f.name);
-    reader.readAsText(f);
+    reader.onload = () => importExtrasText(decodeCsv(reader.result), f.name);
+    reader.readAsArrayBuffer(f);
   };
 }
 

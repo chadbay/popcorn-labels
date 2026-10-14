@@ -29,7 +29,15 @@ Everything runs inside the browser — neither file is uploaded anywhere.
    week until the Booster Club database is corrected. Fix-ups live in the
    browser (and in share links) but are never included in exported
    settings.json, so student names stay out of this public repo.
-4. Download and print at **Actual size / 100%** (never "Fit to page").
+   Kids who aren't in the Booster Club at all go under Roster & Settings →
+   **Extra students** (typed in, or imported from a .csv; **Export list**
+   saves them to a local .csv). Same privacy rule: browser and share links
+   only, never in settings.json, and `*.csv` is gitignored.
+4. If the two files disagree on a room, the red box explains the likely
+   reason and offers **Use … on the bag label** to make that room's bag label
+   match its roster (the packing-list count). Dropping only the packing list
+   PDF is the fallback: every count then comes from its names.
+5. Download and print at **Actual size / 100%** (never "Fit to page").
 
 The **Help** tab inside the app has the full instructions, including how to
 handle roster changes.
