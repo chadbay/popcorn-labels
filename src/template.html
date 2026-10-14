@@ -181,7 +181,7 @@
       <div class="dz-main">Drop the weekly files here</div>
       <div class="dz-sub">Excel order export (.xlsx) for bag labels · Packing List Report (.pdf) for roster labels with names<br>
         Drop both at once or one at a time — nothing is uploaded, files stay on this computer</div>
-      <input id="fileInput" type="file" accept=".xlsx,.xlsm,.xls,.pdf" multiple hidden>
+      <input id="fileInput" type="file" accept=".xlsx,.xlsm,.xls,.pdf,.csv" multiple hidden>
     </div>
     <div id="demoBar" hidden>
       <span>👀 This is <strong>example data</strong> — every student and parent below is made up.
@@ -253,6 +253,31 @@
     <p class="note">Fix-ups contain student names, so they stay in this browser and in share links.
        They are <strong>never</strong> included in “Export settings” — no student names end up in the
        website’s public files.</p>
+
+    <h2>Extra students (not in the Booster Club)</h2>
+    <p>Kids who should get popcorn but aren’t in the Booster Club database, so they are in neither
+       weekly file. Each one is added to their homeroom’s roster label and counts as one more bag,
+       every week until you remove them here.</p>
+    <table id="extrasTable" hidden>
+      <thead><tr><th>Student</th><th style="width:14em">Homeroom</th><th style="width:3em"></th></tr></thead>
+      <tbody id="extrasBody"></tbody>
+    </table>
+    <p class="note" id="extrasEmpty">No extra students.</p>
+    <div class="add-row">
+      <input id="newExtraStudent" placeholder="First Last">
+      <select id="newExtraTeacher"></select>
+      <button id="addExtraBtn" class="btn primary">Add student</button>
+    </div>
+    <div class="add-row">
+      <button id="exportExtrasBtn" class="btn">Export list (.csv)</button>
+      <button id="importExtrasBtn" class="btn">Import list (.csv)</button>
+      <input id="importExtrasInput" type="file" accept=".csv" hidden>
+    </div>
+    <p class="note">The list is saved in this browser and in share links. <strong>Export list</strong> saves it as
+       <code>extra-students.csv</code> (Student, Teacher, Grade) to keep as a backup or move to another computer;
+       import it here or just drop it on the Make Labels box with the weekly files. You can also type a list in
+       Excel and save it as .csv — “Miss Martin” works as well as “Martin”. Because it has student names, the
+       list is <strong>never</strong> part of “Export settings”, and the .csv must never be added to the website repo.</p>
 
     <h2>Roster labels</h2>
     <fieldset>

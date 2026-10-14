@@ -94,8 +94,11 @@ function adoptSettings(s, version) {
   // incoming settings bring their own (e.g. a share link from another volunteer).
   const prevFixups = state.settings && Array.isArray(state.settings.assignments)
     ? state.settings.assignments : [];
+  const prevExtras = state.settings && Array.isArray(state.settings.extras)
+    ? state.settings.extras : [];
   state.settings = clone(s);
   if (!Array.isArray(state.settings.assignments)) state.settings.assignments = clone(prevFixups);
+  if (!Array.isArray(state.settings.extras)) state.settings.extras = clone(prevExtras);
   state.basedOnVersion = version || s.version || 'unknown';
   saveLocal();
   renderSettingsTab();
@@ -110,10 +113,12 @@ function todayISO() {
 
 function exportSettings() {
   const out = clone(state.settings);
-  // Fix-ups contain student names; the export is meant for the public repo,
-  // so they never leave this browser (share links do include them).
-  const hadFixups = Array.isArray(out.assignments) && out.assignments.length > 0;
+  // Fix-ups and extra students contain student names; the export is meant for
+  // the public repo, so they never leave this browser (share links do include them).
+  const hadFixups = (Array.isArray(out.assignments) && out.assignments.length > 0) ||
+    (Array.isArray(out.extras) && out.extras.length > 0);
   delete out.assignments;
+  delete out.extras;
   out.version = todayISO();
   const blob = new Blob([JSON.stringify(out, null, 2) + '\n'], { type: 'application/json' });
   const a = document.createElement('a');
@@ -123,7 +128,7 @@ function exportSettings() {
   a.click();
   URL.revokeObjectURL(a.href);
   toast('Settings exported. Committing this file to the repo makes it the new default for everyone.' +
-    (hadFixups ? ' (Order fix-ups are not included — they contain student names.)' : ''));
+    (hadFixups ? ' (Order fix-ups and extra students are not included — they contain student names.)' : ''));
 }
 
 function importSettingsFile(file) {
@@ -388,8 +393,110 @@ function effectivePacking() {
     if (remaining > 0) unassigned.push({ room: entry.room, parent: entry.parent, student: entry.student, qty: remaining });
   }
 
+  // Extra students (not in the Booster Club) join their homeroom's roster. One
+  // already on that roster by name (e.g. they joined since) is not added twice.
+  const extras = [];
+  for (const x of activeExtras()) {
+    if (!rooms.has(x.teacher)) rooms.set(x.teacher, []);
+    const names = rooms.get(x.teacher);
+    if (names.some((n) => normName(n) === normName(x.student))) continue;
+    names.push(x.student);
+    extras.push(x);
+  }
+
   for (const names of rooms.values()) sortRosterNames(names);
-  return { rooms, unassigned, applied };
+  return { rooms, unassigned, applied, extras };
+}
+
+/* ============================ Extra students ============================ */
+/* Children who get popcorn but are not in the Booster Club, so no weekly file
+ * has them. Each one adds a name to their homeroom's roster label and one bag
+ * to its count, every week until removed. Like fix-ups, saved in this browser
+ * and in share links but never in exported settings.json. */
+
+/* The extra-students file: a .csv kept on the volunteer's own computer
+ * (Student, Teacher, optional Grade). "Export list" writes it and dropping it
+ * on the app (or "Import list") reads it back, so the list can be moved
+ * between computers or kept as a backup without ever touching settings.json. */
+
+function parseExtrasCsv(text) {
+  const wb = XLSX.read(text, { type: 'string' });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' })
+    .map((r) => r.map((c) => String(c ?? '').trim()))
+    .filter((r) => r.some(Boolean));
+  if (!rows.length) return [];
+  // Header row optional: look for Student/Name and Teacher/Homeroom columns,
+  // otherwise column A is the student and column B the teacher.
+  let sCol = 0, tCol = 1, start = 0;
+  const head = rows[0].map((c) => c.toLowerCase());
+  const hs = head.findIndex((c) => /student|name|child/.test(c));
+  const ht = head.findIndex((c) => /teacher|homeroom|room/.test(c));
+  if (hs >= 0 || ht >= 0) {
+    if (hs >= 0) sCol = hs;
+    if (ht >= 0) tCol = ht;
+    start = 1;
+  }
+  return rows.slice(start)
+    .map((r) => ({ student: (r[sCol] || '').replace(/\s+/g, ' '), teacher: (r[tCol] || '').replace(/\s+/g, ' ') }))
+    .filter((r) => r.student);
+}
+
+/* Matches a typed teacher name to the roster, ignoring case and a leading
+ * "Miss/Mrs./Ms./Mr." — so "Miss Martin" finds Martin. */
+function rosterTeacherFor(raw) {
+  const key = normName(raw).replace(/^(miss|mrs?|ms|mx|dr)\.?\s+/, '');
+  if (!key) return null;
+  const t = state.settings.teachers.find((t) => normName(t.name) === key);
+  return t ? t.name : null;
+}
+
+/* Adds the file's kids to the Extra students list (skipping ones already on
+ * it) and reports any whose teacher isn't in the roster. */
+function importExtrasText(text, name) {
+  let rows;
+  try { rows = parseExtrasCsv(text); } catch (e) { rows = null; }
+  if (!rows || !rows.length) { toast(`No students found in ${name}. It needs Student and Teacher columns.`, true); return; }
+  if (!Array.isArray(state.settings.extras)) state.settings.extras = [];
+  const list = state.settings.extras;
+  let added = 0, already = 0;
+  const unmatched = [];
+  for (const r of rows) {
+    const teacher = rosterTeacherFor(r.teacher);
+    if (!teacher) { unmatched.push(`${r.student} (“${r.teacher || 'no teacher'}”)`); continue; }
+    if (list.some((x) => normName(x.student) === normName(r.student) && x.teacher === teacher)) { already++; continue; }
+    list.push({ student: r.student, teacher });
+    added++;
+  }
+  settingsEdited();
+  toast(`Extra students from ${name}: ${added} added` +
+    (already ? `, ${already} already on the list` : '') +
+    (unmatched.length ? `. Not added — teacher not in the roster: ${unmatched.join('; ')}` : '') + '.',
+    unmatched.length > 0);
+}
+
+function exportExtras() {
+  const list = state.settings.extras || [];
+  if (!list.length) { toast('There are no extra students to export.', true); return; }
+  const gradeOf = (name) => {
+    const t = state.settings.teachers.find((t) => t.name === name);
+    return t ? (state.settings.grades.pretty[t.grade] || t.grade) : '';
+  };
+  const cell = (v) => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+  const csv = ['Student,Teacher,Grade']
+    .concat(list.map((x) => [x.student, x.teacher, gradeOf(x.teacher)].map((v) => cell(String(v || ''))).join(',')))
+    .join('\r\n') + '\r\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = 'extra-students.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('Extra students exported to extra-students.csv. It has student names — keep it on your computer and never add it to the website repo.');
+}
+
+function activeExtras() {
+  return (state.settings.extras || [])
+    .filter((x) => String(x.student || '').trim() && x.teacher)
+    .map((x) => ({ student: String(x.student).trim(), teacher: x.teacher }));
 }
 
 /* ============================ Example mode ============================ */
@@ -796,6 +903,10 @@ function reprocess() {
         parsed.orders.set(a.teacher, (parsed.orders.get(a.teacher) || 0) + take);
       }
     }
+    // Extra students are in neither file; each adds one bag to their room.
+    for (const x of eff ? eff.extras : activeExtras()) {
+      parsed.orders.set(x.teacher, (parsed.orders.get(x.teacher) || 0) + 1);
+    }
   } else {
     const orders = new Map([...eff.rooms].map(([t, names]) => [t, names.length]));
     const unassignedBags = eff.unassigned.reduce((a, e) => a + e.qty, 0);
@@ -833,6 +944,11 @@ function handleFiles(files) {
       const reader = new FileReader();
       reader.onload = () => processExcelBuffer(reader.result, file.name);
       reader.readAsArrayBuffer(file);
+      routed = true;
+    } else if (/\.csv$/i.test(file.name)) {
+      const reader = new FileReader();
+      reader.onload = () => importExtrasText(reader.result, file.name);
+      reader.readAsText(file);
       routed = true;
     } else if (/\.pdf$/i.test(file.name)) {
       const reader = new FileReader();
@@ -966,6 +1082,18 @@ function renderOutput(errorMsg) {
     div.innerHTML =
       `Filed automatically by your saved fix-ups: ${parts.join('; ')}. ` +
       `Manage fix-ups under Roster &amp; Settings.`;
+    warnings.appendChild(div);
+  }
+
+  // Extra students added on top of the weekly files — confirm what happened.
+  const extrasShown = eff ? eff.extras : activeExtras();
+  if (extrasShown.length) {
+    const div = document.createElement('div');
+    div.className = 'warn ok';
+    const parts = extrasShown.map((x) => `<strong>${esc(x.student)}</strong> → ${esc(x.teacher)}`);
+    div.innerHTML =
+      `Added as extra students (not in the Booster Club), one bag each: ${parts.join('; ')}. ` +
+      `Manage them under Roster &amp; Settings.`;
     warnings.appendChild(div);
   }
 
@@ -1132,6 +1260,7 @@ function renderSettingsTab() {
   renderRoster();
   renderStaffLabels();
   renderFixups();
+  renderExtras();
   renderAdvanced();
 }
 
@@ -1176,6 +1305,54 @@ function renderFixups() {
     };
     tbody.appendChild(tr);
   });
+}
+
+function renderExtras() {
+  const s = state.settings;
+  if (!Array.isArray(s.extras)) s.extras = [];
+  const list = s.extras;
+  $('#extrasTable').hidden = !list.length;
+  $('#extrasEmpty').hidden = !!list.length;
+  const tbody = $('#extrasBody');
+  tbody.innerHTML = '';
+
+  list.forEach((x, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td><input data-f="student" value="${esc(x.student || '')}"></td>` +
+      `<td><select data-f="teacher">${homeroomSelectHtml(x.teacher)}</select></td>` +
+      `<td><button class="btn small danger" title="Remove">✕</button></td>`;
+    tr.querySelector('[data-f=student]').onchange = (e) => { x.student = e.target.value.trim(); settingsEdited(); };
+    tr.querySelector('[data-f=teacher]').onchange = (e) => { x.teacher = e.target.value; settingsEdited(); };
+    tr.querySelector('button').onclick = () => {
+      if (!confirm(`Remove ${x.student || 'this student'} from the extra students?`)) return;
+      list.splice(idx, 1);
+      settingsEdited();
+    };
+    tbody.appendChild(tr);
+  });
+
+  $('#newExtraTeacher').innerHTML = homeroomSelectHtml('');
+  $('#addExtraBtn').onclick = () => {
+    const student = $('#newExtraStudent').value.trim();
+    const teacher = $('#newExtraTeacher').value;
+    if (!student) { toast('Type the student’s name first.', true); return; }
+    if (!teacher) { toast('Pick the homeroom.', true); return; }
+    list.push({ student, teacher });
+    $('#newExtraStudent').value = '';
+    settingsEdited();
+    toast(`${student} added to ${teacher}’s roster — one extra bag every week until removed.`);
+  };
+  $('#exportExtrasBtn').onclick = exportExtras;
+  $('#importExtrasBtn').onclick = () => $('#importExtrasInput').click();
+  $('#importExtrasInput').onchange = (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => importExtrasText(reader.result, f.name);
+    reader.readAsText(f);
+  };
 }
 
 function renderVersionInfo() {
@@ -1403,6 +1580,7 @@ async function init() {
     state.settings.roster = clone(defaults().roster || { footer: '' });
   }
   if (!Array.isArray(state.settings.assignments)) state.settings.assignments = [];
+  if (!Array.isArray(state.settings.extras)) state.settings.extras = [];
 
   renderSettingsTab();
 
