@@ -94,8 +94,11 @@ function adoptSettings(s, version) {
   // incoming settings bring their own (e.g. a share link from another volunteer).
   const prevFixups = state.settings && Array.isArray(state.settings.assignments)
     ? state.settings.assignments : [];
+  const prevExtras = state.settings && Array.isArray(state.settings.extras)
+    ? state.settings.extras : [];
   state.settings = clone(s);
   if (!Array.isArray(state.settings.assignments)) state.settings.assignments = clone(prevFixups);
+  if (!Array.isArray(state.settings.extras)) state.settings.extras = clone(prevExtras);
   state.basedOnVersion = version || s.version || 'unknown';
   saveLocal();
   renderSettingsTab();
@@ -110,10 +113,12 @@ function todayISO() {
 
 function exportSettings() {
   const out = clone(state.settings);
-  // Fix-ups contain student names; the export is meant for the public repo,
-  // so they never leave this browser (share links do include them).
-  const hadFixups = Array.isArray(out.assignments) && out.assignments.length > 0;
+  // Fix-ups and extra students contain student names; the export is meant for
+  // the public repo, so they never leave this browser (share links do include them).
+  const hadFixups = (Array.isArray(out.assignments) && out.assignments.length > 0) ||
+    (Array.isArray(out.extras) && out.extras.length > 0);
   delete out.assignments;
+  delete out.extras;
   out.version = todayISO();
   const blob = new Blob([JSON.stringify(out, null, 2) + '\n'], { type: 'application/json' });
   const a = document.createElement('a');
@@ -123,7 +128,7 @@ function exportSettings() {
   a.click();
   URL.revokeObjectURL(a.href);
   toast('Settings exported. Committing this file to the repo makes it the new default for everyone.' +
-    (hadFixups ? ' (Order fix-ups are not included — they contain student names.)' : ''));
+    (hadFixups ? ' (Order fix-ups and extra students are not included — they contain student names.)' : ''));
 }
 
 function importSettingsFile(file) {
@@ -388,8 +393,31 @@ function effectivePacking() {
     if (remaining > 0) unassigned.push({ room: entry.room, parent: entry.parent, student: entry.student, qty: remaining });
   }
 
+  // Extra students (not in the Booster Club) join their homeroom's roster. One
+  // already on that roster by name (e.g. they joined since) is not added twice.
+  const extras = [];
+  for (const x of activeExtras()) {
+    if (!rooms.has(x.teacher)) rooms.set(x.teacher, []);
+    const names = rooms.get(x.teacher);
+    if (names.some((n) => normName(n) === normName(x.student))) continue;
+    names.push(x.student);
+    extras.push(x);
+  }
+
   for (const names of rooms.values()) sortRosterNames(names);
-  return { rooms, unassigned, applied };
+  return { rooms, unassigned, applied, extras };
+}
+
+/* ============================ Extra students ============================ */
+/* Children who get popcorn but are not in the Booster Club, so no weekly file
+ * has them. Each one adds a name to their homeroom's roster label and one bag
+ * to its count, every week until removed. Like fix-ups, saved in this browser
+ * and in share links but never in exported settings.json. */
+
+function activeExtras() {
+  return (state.settings.extras || [])
+    .filter((x) => String(x.student || '').trim() && x.teacher)
+    .map((x) => ({ student: String(x.student).trim(), teacher: x.teacher }));
 }
 
 /* ============================ Example mode ============================ */
@@ -796,6 +824,10 @@ function reprocess() {
         parsed.orders.set(a.teacher, (parsed.orders.get(a.teacher) || 0) + take);
       }
     }
+    // Extra students are in neither file; each adds one bag to their room.
+    for (const x of eff ? eff.extras : activeExtras()) {
+      parsed.orders.set(x.teacher, (parsed.orders.get(x.teacher) || 0) + 1);
+    }
   } else {
     const orders = new Map([...eff.rooms].map(([t, names]) => [t, names.length]));
     const unassignedBags = eff.unassigned.reduce((a, e) => a + e.qty, 0);
@@ -969,6 +1001,18 @@ function renderOutput(errorMsg) {
     warnings.appendChild(div);
   }
 
+  // Extra students added on top of the weekly files — confirm what happened.
+  const extrasShown = eff ? eff.extras : activeExtras();
+  if (extrasShown.length) {
+    const div = document.createElement('div');
+    div.className = 'warn ok';
+    const parts = extrasShown.map((x) => `<strong>${esc(x.student)}</strong> → ${esc(x.teacher)}`);
+    div.innerHTML =
+      `Added as extra students (not in the Booster Club), one bag each: ${parts.join('; ')}. ` +
+      `Manage them under Roster &amp; Settings.`;
+    warnings.appendChild(div);
+  }
+
   // Orders with no homeroom — offer to file each one on the spot.
   if (eff) {
     for (const entry of eff.unassigned) {
@@ -1132,6 +1176,7 @@ function renderSettingsTab() {
   renderRoster();
   renderStaffLabels();
   renderFixups();
+  renderExtras();
   renderAdvanced();
 }
 
@@ -1176,6 +1221,44 @@ function renderFixups() {
     };
     tbody.appendChild(tr);
   });
+}
+
+function renderExtras() {
+  const s = state.settings;
+  if (!Array.isArray(s.extras)) s.extras = [];
+  const list = s.extras;
+  $('#extrasTable').hidden = !list.length;
+  $('#extrasEmpty').hidden = !!list.length;
+  const tbody = $('#extrasBody');
+  tbody.innerHTML = '';
+
+  list.forEach((x, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td><input data-f="student" value="${esc(x.student || '')}"></td>` +
+      `<td><select data-f="teacher">${homeroomSelectHtml(x.teacher)}</select></td>` +
+      `<td><button class="btn small danger" title="Remove">✕</button></td>`;
+    tr.querySelector('[data-f=student]').onchange = (e) => { x.student = e.target.value.trim(); settingsEdited(); };
+    tr.querySelector('[data-f=teacher]').onchange = (e) => { x.teacher = e.target.value; settingsEdited(); };
+    tr.querySelector('button').onclick = () => {
+      if (!confirm(`Remove ${x.student || 'this student'} from the extra students?`)) return;
+      list.splice(idx, 1);
+      settingsEdited();
+    };
+    tbody.appendChild(tr);
+  });
+
+  $('#newExtraTeacher').innerHTML = homeroomSelectHtml('');
+  $('#addExtraBtn').onclick = () => {
+    const student = $('#newExtraStudent').value.trim();
+    const teacher = $('#newExtraTeacher').value;
+    if (!student) { toast('Type the student’s name first.', true); return; }
+    if (!teacher) { toast('Pick the homeroom.', true); return; }
+    list.push({ student, teacher });
+    $('#newExtraStudent').value = '';
+    settingsEdited();
+    toast(`${student} added to ${teacher}’s roster — one extra bag every week until removed.`);
+  };
 }
 
 function renderVersionInfo() {
@@ -1403,6 +1486,7 @@ async function init() {
     state.settings.roster = clone(defaults().roster || { footer: '' });
   }
   if (!Array.isArray(state.settings.assignments)) state.settings.assignments = [];
+  if (!Array.isArray(state.settings.extras)) state.settings.extras = [];
 
   renderSettingsTab();
 

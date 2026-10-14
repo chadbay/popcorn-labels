@@ -254,6 +254,23 @@
        They are <strong>never</strong> included in “Export settings” — no student names end up in the
        website’s public files.</p>
 
+    <h2>Extra students (not in the Booster Club)</h2>
+    <p>Kids who should get popcorn but aren’t in the Booster Club database, so they are in neither
+       weekly file. Each one is added to their homeroom’s roster label and counts as one more bag,
+       every week until you remove them here.</p>
+    <table id="extrasTable" hidden>
+      <thead><tr><th>Student</th><th style="width:14em">Homeroom</th><th style="width:3em"></th></tr></thead>
+      <tbody id="extrasBody"></tbody>
+    </table>
+    <p class="note" id="extrasEmpty">No extra students.</p>
+    <div class="add-row">
+      <input id="newExtraStudent" placeholder="First Last">
+      <select id="newExtraTeacher"></select>
+      <button id="addExtraBtn" class="btn primary">Add student</button>
+    </div>
+    <p class="note">Like fix-ups, extra students stay in this browser and in share links and are
+       <strong>never</strong> included in “Export settings”.</p>
+
     <h2>Roster labels</h2>
     <fieldset>
       <label>Sheet orientation
