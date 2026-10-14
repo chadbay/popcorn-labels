@@ -36,6 +36,7 @@ const state = {
   dismissedVersion: null,
   excel: null,          // { name, buffer } — weekly order export (counts)
   packing: null,        // { name, rooms: Map<teacher, string[]>, unassigned } — raw packing-list parse
+  extrasFile: null,     // { name, rows: [{ student, teacher }] } — non-Booster Club kids (.csv)
   demo: false,          // example mode: made-up data loaded, persistence disabled
   demoBackup: null,     // snapshot restored when example mode exits
   packingEff: null,     // packing after roster fix-ups: { rooms, unassigned, applied }
@@ -94,11 +95,8 @@ function adoptSettings(s, version) {
   // incoming settings bring their own (e.g. a share link from another volunteer).
   const prevFixups = state.settings && Array.isArray(state.settings.assignments)
     ? state.settings.assignments : [];
-  const prevExtras = state.settings && Array.isArray(state.settings.extras)
-    ? state.settings.extras : [];
   state.settings = clone(s);
   if (!Array.isArray(state.settings.assignments)) state.settings.assignments = clone(prevFixups);
-  if (!Array.isArray(state.settings.extras)) state.settings.extras = clone(prevExtras);
   state.basedOnVersion = version || s.version || 'unknown';
   saveLocal();
   renderSettingsTab();
@@ -113,12 +111,10 @@ function todayISO() {
 
 function exportSettings() {
   const out = clone(state.settings);
-  // Fix-ups and extra students contain student names; the export is meant for
-  // the public repo, so they never leave this browser (share links do include them).
-  const hadFixups = (Array.isArray(out.assignments) && out.assignments.length > 0) ||
-    (Array.isArray(out.extras) && out.extras.length > 0);
+  // Fix-ups contain student names; the export is meant for the public repo,
+  // so they never leave this browser (share links do include them).
+  const hadFixups = Array.isArray(out.assignments) && out.assignments.length > 0;
   delete out.assignments;
-  delete out.extras;
   out.version = todayISO();
   const blob = new Blob([JSON.stringify(out, null, 2) + '\n'], { type: 'application/json' });
   const a = document.createElement('a');
@@ -128,7 +124,7 @@ function exportSettings() {
   a.click();
   URL.revokeObjectURL(a.href);
   toast('Settings exported. Committing this file to the repo makes it the new default for everyone.' +
-    (hadFixups ? ' (Order fix-ups and extra students are not included — they contain student names.)' : ''));
+    (hadFixups ? ' (Order fix-ups are not included — they contain student names.)' : ''));
 }
 
 function importSettingsFile(file) {
@@ -393,10 +389,10 @@ function effectivePacking() {
     if (remaining > 0) unassigned.push({ room: entry.room, parent: entry.parent, student: entry.student, qty: remaining });
   }
 
-  // Extra students (not in the Booster Club) join their homeroom's roster. One
+  // Kids from the non-Booster Club file join their homeroom's roster. One
   // already on that roster by name (e.g. they joined since) is not added twice.
   const extras = [];
-  for (const x of activeExtras()) {
+  for (const x of matchedExtras()) {
     if (!rooms.has(x.teacher)) rooms.set(x.teacher, []);
     const names = rooms.get(x.teacher);
     if (names.some((n) => normName(n) === normName(x.student))) continue;
@@ -408,16 +404,56 @@ function effectivePacking() {
   return { rooms, unassigned, applied, extras };
 }
 
-/* ============================ Extra students ============================ */
-/* Children who get popcorn but are not in the Booster Club, so no weekly file
- * has them. Each one adds a name to their homeroom's roster label and one bag
- * to its count, every week until removed. Like fix-ups, saved in this browser
- * and in share links but never in exported settings.json. */
+/* ============================ Non-Booster Club file ============================ */
+/* Kids who get popcorn but are not in the Booster Club database, so neither
+ * weekly file has them. The volunteer keeps a small .csv of them on their own
+ * computer (Student, Teacher — grade optional) and drops it in with the weekly
+ * files. Each kid adds their name to the homeroom's roster label and one bag
+ * to its count. The file is read in the browser only and never saved, so no
+ * student names live in the app, the browser or this repo. */
 
-function activeExtras() {
-  return (state.settings.extras || [])
-    .filter((x) => String(x.student || '').trim() && x.teacher)
-    .map((x) => ({ student: String(x.student).trim(), teacher: x.teacher }));
+function parseExtrasCsv(text) {
+  const wb = XLSX.read(text, { type: 'string' });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' })
+    .map((r) => r.map((c) => String(c ?? '').trim()))
+    .filter((r) => r.some(Boolean));
+  if (!rows.length) return [];
+  // Header row optional: look for Student/Name and Teacher/Homeroom columns,
+  // otherwise column A is the student and column B the teacher.
+  let sCol = 0, tCol = 1, start = 0;
+  const head = rows[0].map((c) => c.toLowerCase());
+  const hs = head.findIndex((c) => /student|name|child/.test(c));
+  const ht = head.findIndex((c) => /teacher|homeroom|room/.test(c));
+  if (hs >= 0 || ht >= 0) {
+    if (hs >= 0) sCol = hs;
+    if (ht >= 0) tCol = ht;
+    start = 1;
+  }
+  return rows.slice(start)
+    .map((r) => ({ student: (r[sCol] || '').replace(/\s+/g, ' '), teacher: (r[tCol] || '').replace(/\s+/g, ' ') }))
+    .filter((r) => r.student);
+}
+
+/* Matches the file's teacher to the roster, ignoring case and a leading
+ * "Miss/Mrs./Ms./Mr." — so "Miss Martin" finds Martin. */
+function rosterTeacherFor(raw) {
+  const key = normName(raw).replace(/^(miss|mrs?|ms|mx|dr)\.?\s+/, '');
+  if (!key) return null;
+  const t = state.settings.teachers.find((t) => normName(t.name) === key) ||
+    state.settings.teachers.find((t) => normName(t.name).split(' ').slice(-1)[0] === key.split(' ').slice(-1)[0]);
+  return t ? t.name : null;
+}
+
+function matchedExtras() {
+  if (!state.extrasFile) return [];
+  return state.extrasFile.rows
+    .map((r) => ({ student: r.student, teacher: rosterTeacherFor(r.teacher), raw: r.teacher }))
+    .filter((r) => r.teacher);
+}
+
+function unmatchedExtras() {
+  if (!state.extrasFile) return [];
+  return state.extrasFile.rows.filter((r) => !rosterTeacherFor(r.teacher));
 }
 
 /* ============================ Example mode ============================ */
@@ -769,6 +805,16 @@ function downloadRosterPdf() {
 
 /* ============================ Processing pipeline ============================ */
 
+function processExtrasText(text, name) {
+  try {
+    state.extrasFile = { name, rows: parseExtrasCsv(text) };
+  } catch (e) {
+    renderOutput(`Could not read ${name} as the non-Booster Club list.`);
+    return;
+  }
+  reprocess();
+}
+
 function processExcelBuffer(buffer, name) {
   state.excel = { name, buffer };
   reprocess();
@@ -791,7 +837,13 @@ async function processPackingBuffer(buffer, name) {
 
 function reprocess() {
   state.mismatches = [];
-  if (!state.excel && !state.packing) { state.result = null; state.packingEff = null; renderOutput(); return; }
+  if (!state.excel && !state.packing) {
+    state.result = null; state.packingEff = null;
+    renderOutput(state.extrasFile
+      ? `Non-Booster Club list loaded (${state.extrasFile.name}). Now drop this week's Excel export and/or Packing List PDF.`
+      : undefined, !!state.extrasFile);
+    return;
+  }
 
   state.packingEff = state.packing ? effectivePacking() : null;
   const eff = state.packingEff;
@@ -824,8 +876,8 @@ function reprocess() {
         parsed.orders.set(a.teacher, (parsed.orders.get(a.teacher) || 0) + take);
       }
     }
-    // Extra students are in neither file; each adds one bag to their room.
-    for (const x of eff ? eff.extras : activeExtras()) {
+    // Non-Booster Club kids are in neither file; each adds one bag to their room.
+    for (const x of eff ? eff.extras : matchedExtras()) {
       parsed.orders.set(x.teacher, (parsed.orders.get(x.teacher) || 0) + 1);
     }
   } else {
@@ -866,6 +918,11 @@ function handleFiles(files) {
       reader.onload = () => processExcelBuffer(reader.result, file.name);
       reader.readAsArrayBuffer(file);
       routed = true;
+    } else if (/\.(csv|txt)$/i.test(file.name)) {
+      const reader = new FileReader();
+      reader.onload = () => processExtrasText(reader.result, file.name);
+      reader.readAsText(file);
+      routed = true;
     } else if (/\.pdf$/i.test(file.name)) {
       const reader = new FileReader();
       reader.onload = () => processPackingBuffer(reader.result, file.name);
@@ -874,7 +931,7 @@ function handleFiles(files) {
     }
   }
   if (!routed) {
-    renderOutput('Drop the weekly Excel order export (.xlsx) and/or the Packing List Report (.pdf) here.');
+    renderOutput('Drop the weekly Excel order export (.xlsx) and/or the Packing List Report (.pdf) here — plus the non-Booster Club list (.csv) if you keep one.');
   }
 }
 
@@ -907,7 +964,7 @@ function toast(msg, isError) {
 
 /* ============================ Rendering: output ============================ */
 
-function renderOutput(errorMsg) {
+function renderOutput(errorMsg, isInfo) {
   const status = $('#fileStatus');
   const warnings = $('#warnings');
   const totals = $('#totals');
@@ -922,7 +979,7 @@ function renderOutput(errorMsg) {
   rosterBtn.hidden = true;
 
   if (errorMsg) {
-    status.innerHTML = `<div class="warn error">${esc(errorMsg)}</div>`;
+    status.innerHTML = `<div class="${isInfo ? 'file-ok' : 'warn error'}">${esc(errorMsg)}</div>`;
     return;
   }
   if (!state.excel && !state.packing) { status.innerHTML = ''; return; }
@@ -932,6 +989,9 @@ function renderOutput(errorMsg) {
   if (state.excel) slots.push(`Order export: <strong>${esc(state.excel.name)}</strong> ✓`);
   if (state.packing) {
     slots.push(`Packing list: <strong>${esc(state.packing.name)}</strong> ✓ (${state.packingEff.rooms.size} homerooms)`);
+  }
+  if (state.extrasFile) {
+    slots.push(`Non-Booster Club list: <strong>${esc(state.extrasFile.name)}</strong> ✓ (${state.extrasFile.rows.length} kid${state.extrasFile.rows.length === 1 ? '' : 's'})`);
   }
   if (!state.packing) {
     slots.push(`<em>Add the Packing List Report PDF to also get roster labels with student names.</em>`);
@@ -1001,15 +1061,22 @@ function renderOutput(errorMsg) {
     warnings.appendChild(div);
   }
 
-  // Extra students added on top of the weekly files — confirm what happened.
-  const extrasShown = eff ? eff.extras : activeExtras();
+  // Kids from the non-Booster Club file — confirm what happened.
+  const extrasShown = eff ? eff.extras : matchedExtras();
   if (extrasShown.length) {
     const div = document.createElement('div');
     div.className = 'warn ok';
     const parts = extrasShown.map((x) => `<strong>${esc(x.student)}</strong> → ${esc(x.teacher)}`);
+    div.innerHTML = `Added from the non-Booster Club list, one bag each: ${parts.join('; ')}.`;
+    warnings.appendChild(div);
+  }
+  for (const x of unmatchedExtras()) {
+    const div = document.createElement('div');
+    div.className = 'warn';
     div.innerHTML =
-      `Added as extra students (not in the Booster Club), one bag each: ${parts.join('; ')}. ` +
-      `Manage them under Roster &amp; Settings.`;
+      `<strong>${esc(x.student)}</strong> in the non-Booster Club list has teacher ` +
+      `“${esc(x.teacher || '(blank)')}”, which isn’t in the roster, so they are <strong>not</strong> on any label. ` +
+      `Fix the teacher in the .csv (use the name as it appears under Roster &amp; Settings) and drop it again.`;
     warnings.appendChild(div);
   }
 
@@ -1176,7 +1243,6 @@ function renderSettingsTab() {
   renderRoster();
   renderStaffLabels();
   renderFixups();
-  renderExtras();
   renderAdvanced();
 }
 
@@ -1221,44 +1287,6 @@ function renderFixups() {
     };
     tbody.appendChild(tr);
   });
-}
-
-function renderExtras() {
-  const s = state.settings;
-  if (!Array.isArray(s.extras)) s.extras = [];
-  const list = s.extras;
-  $('#extrasTable').hidden = !list.length;
-  $('#extrasEmpty').hidden = !!list.length;
-  const tbody = $('#extrasBody');
-  tbody.innerHTML = '';
-
-  list.forEach((x, idx) => {
-    const tr = document.createElement('tr');
-    tr.innerHTML =
-      `<td><input data-f="student" value="${esc(x.student || '')}"></td>` +
-      `<td><select data-f="teacher">${homeroomSelectHtml(x.teacher)}</select></td>` +
-      `<td><button class="btn small danger" title="Remove">✕</button></td>`;
-    tr.querySelector('[data-f=student]').onchange = (e) => { x.student = e.target.value.trim(); settingsEdited(); };
-    tr.querySelector('[data-f=teacher]').onchange = (e) => { x.teacher = e.target.value; settingsEdited(); };
-    tr.querySelector('button').onclick = () => {
-      if (!confirm(`Remove ${x.student || 'this student'} from the extra students?`)) return;
-      list.splice(idx, 1);
-      settingsEdited();
-    };
-    tbody.appendChild(tr);
-  });
-
-  $('#newExtraTeacher').innerHTML = homeroomSelectHtml('');
-  $('#addExtraBtn').onclick = () => {
-    const student = $('#newExtraStudent').value.trim();
-    const teacher = $('#newExtraTeacher').value;
-    if (!student) { toast('Type the student’s name first.', true); return; }
-    if (!teacher) { toast('Pick the homeroom.', true); return; }
-    list.push({ student, teacher });
-    $('#newExtraStudent').value = '';
-    settingsEdited();
-    toast(`${student} added to ${teacher}’s roster — one extra bag every week until removed.`);
-  };
 }
 
 function renderVersionInfo() {
@@ -1486,7 +1514,6 @@ async function init() {
     state.settings.roster = clone(defaults().roster || { footer: '' });
   }
   if (!Array.isArray(state.settings.assignments)) state.settings.assignments = [];
-  if (!Array.isArray(state.settings.extras)) state.settings.extras = [];
 
   renderSettingsTab();
 

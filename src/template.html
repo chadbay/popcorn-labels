@@ -179,9 +179,9 @@
     <div id="dropzone">
       <div class="dz-icon">📄</div>
       <div class="dz-main">Drop the weekly files here</div>
-      <div class="dz-sub">Excel order export (.xlsx) for bag labels · Packing List Report (.pdf) for roster labels with names<br>
+      <div class="dz-sub">Excel order export (.xlsx) for bag labels · Packing List Report (.pdf) for roster labels with names · non-Booster Club list (.csv) if you keep one<br>
         Drop both at once or one at a time — nothing is uploaded, files stay on this computer</div>
-      <input id="fileInput" type="file" accept=".xlsx,.xlsm,.xls,.pdf" multiple hidden>
+      <input id="fileInput" type="file" accept=".xlsx,.xlsm,.xls,.pdf,.csv" multiple hidden>
     </div>
     <div id="demoBar" hidden>
       <span>👀 This is <strong>example data</strong> — every student and parent below is made up.
@@ -253,23 +253,6 @@
     <p class="note">Fix-ups contain student names, so they stay in this browser and in share links.
        They are <strong>never</strong> included in “Export settings” — no student names end up in the
        website’s public files.</p>
-
-    <h2>Extra students (not in the Booster Club)</h2>
-    <p>Kids who should get popcorn but aren’t in the Booster Club database, so they are in neither
-       weekly file. Each one is added to their homeroom’s roster label and counts as one more bag,
-       every week until you remove them here.</p>
-    <table id="extrasTable" hidden>
-      <thead><tr><th>Student</th><th style="width:14em">Homeroom</th><th style="width:3em"></th></tr></thead>
-      <tbody id="extrasBody"></tbody>
-    </table>
-    <p class="note" id="extrasEmpty">No extra students.</p>
-    <div class="add-row">
-      <input id="newExtraStudent" placeholder="First Last">
-      <select id="newExtraTeacher"></select>
-      <button id="addExtraBtn" class="btn primary">Add student</button>
-    </div>
-    <p class="note">Like fix-ups, extra students stay in this browser and in share links and are
-       <strong>never</strong> included in “Export settings”.</p>
 
     <h2>Roster labels</h2>
     <fieldset>
@@ -348,6 +331,13 @@
             use the “File it” box in the warning: type the student’s name and pick the room. The app remembers the
             fix-up and files that parent’s order automatically every week (one fix-up per child; manage them under
             Roster &amp; Settings).</li>
+        <li><strong>A kid who isn’t in the Booster Club should get popcorn.</strong> They aren’t in either weekly file,
+            so keep a small spreadsheet of them on your computer, saved as <strong>.csv</strong> with two columns,
+            <code>Student</code> and <code>Teacher</code> (a <code>Grade</code> column is fine too; it’s ignored):
+            <br><code>Student,Teacher</code><br><code>Jamie Example,Martin</code><br>
+            Drop it in with the weekly files every week. Each kid is added to their homeroom’s roster label and
+            counts as one more bag. “Miss Martin” works as well as “Martin”. The file is only read, never saved by
+            the app, so no student names are kept anywhere but your own copy.</li>
         <li><strong>Where does my data go?</strong> Nowhere. The Excel file is read entirely inside your browser and
             never uploaded. Settings are saved in your browser on this computer.</li>
         <li><strong>The PDF prints misaligned.</strong> Make sure the print dialog says Actual size / 100% scale,
